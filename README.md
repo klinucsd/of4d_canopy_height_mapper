@@ -37,12 +37,35 @@ pip install jupyter notebook
 
 ### Credentials Setup
 
-Copy the example environment file and add your NASA EarthData credentials:
+This pipeline requires a free NASA EarthData account to download GEDI L2A and SRTM data.
+
+**Step 1: Get a NASA EarthData account**
+
+Register at: https://urs.earthdata.nasa.gov/
+
+**Step 2: Create your `.env` file**
 
 ```bash
 cp .env.example .env
-# Edit .env with your credentials (get free account at https://urs.earthdata.nasa.gov/)
 ```
+
+**Step 3: Edit `.env` with your credentials**
+
+```bash
+# Using a text editor
+nano .env
+# or
+vim .env
+```
+
+Your `.env` file should look like this:
+
+```bash
+EARTHDATA_USERNAME=your_actual_username
+EARTHDATA_PASSWORD=your_actual_password
+```
+
+> **Note**: The `.env` file is ignored by git (see `.gitignore`) and will never be uploaded to GitHub, keeping your credentials safe.
 
 ## Quick Start
 
