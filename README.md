@@ -111,15 +111,15 @@ python example_full_pipeline.py     # Complete workflow (1-3 hrs)
 
 ```
 canopy_height_app/
-├── complete_canopy_height_pipeline.py   # Main pipeline module
+├── complete_canopy_height_pipeline.py       # Main pipeline module
 ├── visualizations.py                        # Plotting and visualization tools
 ├── validation.py                            # Model validation metrics
 ├── .env.example                             # Environment variables template
 ├── .gitignore                               # Git ignore patterns
 ├── examples/
-│   ├── example_quick_demo.py               # Minimal working example
-│   ├── example_full_pipeline.py            # Complete workflow
-│   └── README.md                           # Examples documentation
+│   ├── example_quick_demo.py                # Minimal working example
+│   ├── example_full_pipeline.py             # Complete workflow
+│   └── README.md                            # Examples documentation
 ├── README.md                                # Main documentation (this file)
 ├── PIPELINE.md                              # Complete technical guide
 └── API_REFERENCE.md                         # Detailed API documentation
