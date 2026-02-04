@@ -23,7 +23,7 @@ import pandas as pd
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
-from complete_canopy_height_pipeline_v2 import *
+from complete_canopy_height_pipeline import *
 import visualizations as viz
 import validation as val
 import time

@@ -49,13 +49,13 @@ cp .env.example .env
 ### Option 1: Command Line
 
 ```bash
-python complete_canopy_height_pipeline_v2.py
+python complete_canopy_height_pipeline.py
 ```
 
 ### Option 2: Python API
 
 ```python
-from complete_canopy_height_pipeline_v2 import *
+from complete_canopy_height_pipeline import *
 import visualizations as viz
 import validation as val
 
@@ -94,7 +94,7 @@ jupyter notebook Canopy_Height_Tutorial.ipynb  # Interactive
 
 ```
 canopy_height_app/
-├── complete_canopy_height_pipeline_v2.py   # Main pipeline module
+├── complete_canopy_height_pipeline.py   # Main pipeline module
 ├── visualizations.py                        # Plotting and visualization tools
 ├── validation.py                            # Model validation metrics
 ├── .env.example                             # Environment variables template

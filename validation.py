@@ -259,7 +259,7 @@ def validate_with_gedi(model, gedi_csv, s2_tif, s1_tif, topo_tif, output_dir=Non
     dict : Validation results
     """
     # Extract features at GEDI locations
-    from complete_canopy_height_pipeline_v2 import extract_features
+    from complete_canopy_height_pipeline import extract_features
 
     X, y, features = extract_features(gedi_csv, s2_tif, s1_tif, topo_tif)
 
@@ -316,7 +316,7 @@ def spatial_cross_validation(model, gedi_csv, s2_tif, s1_tif, topo_tif,
     --------
     dict : Spatial CV results
     """
-    from complete_canopy_height_pipeline_v2 import extract_features
+    from complete_canopy_height_pipeline import extract_features
 
     gedi = pd.read_csv(gedi_csv)
 
@@ -647,7 +647,7 @@ def generate_validation_report(gedi_csv, s2_tif, s1_tif, topo_tif, model,
 
     # 1. Extract features
     print("1. Extracting features...")
-    from complete_canopy_height_pipeline_v2 import extract_features
+    from complete_canopy_height_pipeline import extract_features
     X, y, features = extract_features(gedi_csv, s2_tif, s1_tif, topo_tif)
 
     # 2. Split data
