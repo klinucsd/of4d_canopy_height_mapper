@@ -30,11 +30,6 @@ pip install rasterio numpy pandas scikit-learn requests \
     h5py pyproj scipy matplotlib seaborn joblib python-dotenv
 ```
 
-For Jupyter notebook support:
-```bash
-pip install jupyter notebook
-```
-
 ### Credentials Setup
 
 This pipeline requires a free NASA EarthData account to download GEDI L2A and SRTM data.
@@ -110,7 +105,6 @@ predict_map(model, s2_path, None, topo_path,
 cd examples
 python example_quick_demo.py        # Fast demo (5-15 min)
 python example_full_pipeline.py     # Complete workflow (1-3 hrs)
-jupyter notebook Canopy_Height_Tutorial.ipynb  # Interactive
 ```
 
 ## Project Structure
@@ -125,7 +119,6 @@ canopy_height_app/
 ├── examples/
 │   ├── example_quick_demo.py               # Minimal working example
 │   ├── example_full_pipeline.py            # Complete workflow
-│   ├── Canopy_Height_Tutorial.ipynb        # Jupyter notebook
 │   └── README.md                           # Examples documentation
 ├── README.md                                # Main documentation (this file)
 ├── PIPELINE.md                              # Complete technical guide

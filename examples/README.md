@@ -1,6 +1,6 @@
 # Canopy Height Mapping Examples
 
-This directory contains example scripts and tutorials demonstrating the canopy height mapping pipeline.
+This directory contains example scripts demonstrating the canopy height mapping pipeline.
 
 ## 📁 Contents
 
@@ -48,31 +48,6 @@ python example_full_pipeline.py
 
 ---
 
-### 3. Jupyter Notebook Tutorial (`Canopy_Height_Tutorial.ipynb`)
-**Purpose:** Interactive, step-by-step learning
-
-```bash
-jupyter notebook Canopy_Height_Tutorial.ipynb
-```
-
-**Features:**
-- Detailed explanations
-- Code cells with output
-- Visualizations inline
-- Perfect for workshops and teaching
-
-**Coverage:**
-1. Introduction to the pipeline
-2. GEDI data acquisition
-3. Satellite data download
-4. Feature extraction
-5. Model training
-6. Validation
-7. Map generation
-8. Analysis and interpretation
-
----
-
 ## 🚀 Quick Start
 
 ### Option 1: Run the Quick Demo
@@ -81,13 +56,7 @@ cd examples
 python example_quick_demo.py
 ```
 
-### Option 2: Launch Jupyter Notebook
-```bash
-cd examples
-jupyter notebook Canopy_Height_Tutorial.ipynb
-```
-
-### Option 3: Run Full Pipeline
+### Option 2: Run Full Pipeline
 ```bash
 cd examples
 python example_full_pipeline.py
