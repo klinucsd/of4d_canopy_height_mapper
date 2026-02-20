@@ -858,24 +858,46 @@ def download_s1_grd_scenes_fixed(items, bbox, output_path):
     return output_path
 
 
-def download_srtm_opentopography(bbox, output_path='topography.tif'):
+def download_srtm_opentopography(bbox, output_path='topography.tif', demtype='COP30'):
     """
-    Download SRTM DEM from OpenTopography
-    Note: OpenTopography may have rate limits or require API key for some requests
+    Download DEM from OpenTopography
+
+    Parameters:
+    -----------
+    bbox : list
+        Bounding box [min_lon, min_lat, max_lon, max_lat]
+    output_path : str
+        Output path for the topography TIFF file
+    demtype : str
+        DEM dataset type. Options:
+        - 'COP30' (default): Copernicus 30m Global DEM (more recent, recommended)
+        - 'SRTMGL1': SRTM 1 Arc-Second Global (30m)
+        - 'SRTMGL3': SRTM 3 Arc-Second Global (90m)
+        - 'AW3D30': ALOS World 3D 30m
+
+    Uses API key from OPENTOPOGRAPHY_API_KEY environment variable if available.
     """
     print("\n" + "="*60)
-    print("Downloading SRTM from OpenTopography")
+    print(f"Downloading {demtype} DEM from OpenTopography")
     print("="*60 + "\n")
-    
+
     base_url = "https://portal.opentopography.org/API/globaldem"
-    
+
     params = {
-        'demtype': 'SRTMGL1',
+        'demtype': demtype,
         'south': bbox[1], 'north': bbox[3],
         'west': bbox[0], 'east': bbox[2],
         'outputFormat': 'GTiff',
     }
-    
+
+    # Add API key if available in environment
+    api_key = os.environ.get('OPENTOPOGRAPHY_API_KEY')
+    if api_key:
+        params['API_Key'] = api_key
+        print("  Using API key from environment")
+    else:
+        print("  No API key found - may hit rate limits")
+
     print("Requesting DEM...")
     try:
         response = requests.get(base_url, params=params, stream=True, timeout=300)

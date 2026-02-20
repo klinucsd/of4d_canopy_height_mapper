@@ -510,9 +510,11 @@ def plot_cross_validation(cv_scores, model_name="Random Forest", output_dir=None
 # ============================================================================
 
 def plot_canopy_height_map(height_map_path, gedi_csv=None, title="Canopy Height Map",
-                           cmap='RdYlGn', output_dir=None):
+                           cmap='YlGnBu', output_dir=None):  # Changed default to YlGnBu (Yellow-Green-Blue)
     """
     Visualize the final canopy height map
+
+    Reprojects height map to WGS84 for proper lat/lon display with GEDI overlay.
 
     Parameters:
     -----------
@@ -528,83 +530,134 @@ def plot_canopy_height_map(height_map_path, gedi_csv=None, title="Canopy Height 
         Directory to save plots
     """
     import rasterio
+    from rasterio.warp import calculate_default_transform, reproject, Resampling
+    from pyproj import CRS
 
     with rasterio.open(height_map_path) as src:
         height_data = src.read(1)
-        extent = [src.bounds.left, src.bounds.right, src.bounds.bottom, src.bounds.top]
-        crs = src.crs
+        src_crs = src.crs
+        src_transform = src.transform
+        src_width = src.width
+        src_height = src.height
 
-    fig = plt.figure(figsize=(16, 12))
-    gs = GridSpec(2, 2, figure=fig, hspace=0.3, wspace=0.3)
+    # Reproject to WGS84 for lat/lon display
+    dst_crs = CRS.from_epsg(4326)  # WGS84
+    transform, width, height = calculate_default_transform(
+        src_crs, dst_crs, src_width, src_height, *src.bounds)
 
-    # Main map
-    ax1 = fig.add_subplot(gs[0, :])
-    im = ax1.imshow(height_data, extent=extent, cmap=cmap, vmin=0, vmax=50,
-                    origin='lower')
-    ax1.set_xlabel('Longitude')
-    ax1.set_ylabel('Latitude')
-    ax1.set_title(f'{title}\nCRS: {crs}', fontsize=14, fontweight='bold')
-    cbar = plt.colorbar(im, ax=ax1, fraction=0.02, pad=0.04)
+    # Create destination array for reprojected data
+    reprojected = np.zeros((height, width), dtype=np.float32)
+
+    # Reproject the height map
+    with rasterio.open(height_map_path) as src:
+        reproject(
+            source=rasterio.band(src, 1),
+            destination=reprojected,
+            src_transform=src_transform,
+            src_crs=src_crs,
+            dst_transform=transform,
+            dst_crs=dst_crs,
+            resampling=Resampling.bilinear)
+
+    # Calculate extent in lat/lon
+    # Transform pixel coordinates to geographic coordinates
+    min_lon, min_lat = transform * (0, 0)
+    max_lon, max_lat = transform * (width, height)
+    extent = [min_lon, max_lon, min_lat, max_lat]
+
+    # Create full-width map only
+    fig, ax = plt.subplots(figsize=(16, 10))
+    im = ax.imshow(reprojected, extent=extent, cmap=cmap, vmin=0, vmax=50, origin='lower')
+    ax.set_xlabel('Longitude', fontsize=12)
+    ax.set_ylabel('Latitude', fontsize=12)
+    ax.set_title(f'{title}\nCRS: WGS84 (Lat/Lon)', fontsize=14, fontweight='bold')
+    cbar = plt.colorbar(im, ax=ax, fraction=0.02, pad=0.04)
     cbar.set_label('Canopy Height (m)', fontsize=12)
-
-    # Overlay GEDI points if provided
-    if gedi_csv:
-        gedi = pd.read_csv(gedi_csv)
-        ax1.scatter(gedi['longitude'], gedi['latitude'],
-                   c=gedi['rh98'], cmap='RdYlGn', s=5,
-                   edgecolors='black', linewidths=0.5, alpha=0.8,
-                   vmin=0, vmax=50)
-    ax1.grid(True, alpha=0.3)
-
-    # Histogram
-    ax2 = fig.add_subplot(gs[1, 0])
-    valid_data = height_data[np.isfinite(height_data) & (height_data > 0)]
-    ax2.hist(valid_data, bins=50, color='forestgreen', edgecolor='black', alpha=0.7)
-    ax2.axvline(np.nanmean(height_data), color='red', linestyle='--', linewidth=2,
-                label=f'Mean: {np.nanmean(height_data):.2f}m')
-    ax2.axvline(np.nanmedian(height_data), color='orange', linestyle='--', linewidth=2,
-                label=f'Median: {np.nanmedian(height_data):.2f}m')
-    ax2.set_xlabel('Canopy Height (m)', fontsize=12)
-    ax2.set_ylabel('Frequency', fontsize=12)
-    ax2.set_title('Height Distribution', fontsize=12, fontweight='bold')
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-
-    # Statistics
-    ax3 = fig.add_subplot(gs[1, 1])
-    ax3.axis('off')
-
-    stats_text = f"""
-    MAP STATISTICS
-    ===============
-    Mean Height:      {np.nanmean(height_data):.2f} m
-    Median Height:    {np.nanmedian(height_data):.2f} m
-    Std Deviation:    {np.nanstd(height_data):.2f} m
-    Min Height:       {np.nanmin(height_data):.2f} m
-    Max Height:       {np.nanmax(height_data):.2f} m
-
-    COVERAGE
-    ========
-    Valid Pixels:     {np.sum(np.isfinite(height_data)):,}
-    NoData Pixels:    {np.sum(~np.isfinite(height_data)):,}
-    Total Pixels:     {height_data.size:,}
-
-    PERCENTILES
-    ===========
-    25th percentile:  {np.nanpercentile(height_data, 25):.2f} m
-    50th percentile:  {np.nanpercentile(height_data, 50):.2f} m
-    75th percentile:  {np.nanpercentile(height_data, 75):.2f} m
-    95th percentile:  {np.nanpercentile(height_data, 95):.2f} m
-    """
-
-    ax3.text(0.1, 0.9, stats_text, transform=ax3.transAxes,
-            fontsize=11, verticalalignment='top', fontfamily='monospace',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+    ax.grid(True, alpha=0.3)
 
     if output_dir:
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         plt.savefig(f'{output_dir}/canopy_height_map.png', dpi=300, bbox_inches='tight')
         print(f"  Saved: {output_dir}/canopy_height_map.png")
+    plt.close(fig)
+
+    return fig
+
+
+def plot_canopy_height_stats(height_map_path, title="Canopy Height Statistics", output_dir=None):
+    """
+    Create a separate statistics panel with histogram and map statistics side by side.
+
+    Parameters:
+    -----------
+    height_map_path : str
+        Path to canopy height GeoTIFF
+    title : str
+        Panel title
+    output_dir : str, optional
+        Directory to save plots
+    """
+    import rasterio
+
+    with rasterio.open(height_map_path) as src:
+        height_data = src.read(1)
+
+    # Wider figure for better right padding on stats
+    fig, axes = plt.subplots(1, 2, figsize=(16, 5))
+
+    # Histogram
+    ax1 = axes[0]
+    valid_data = height_data[np.isfinite(height_data) & (height_data > 0)]
+    ax1.hist(valid_data, bins=50, color='forestgreen', edgecolor='black', alpha=0.7)
+    ax1.axvline(np.nanmean(height_data), color='red', linestyle='--', linewidth=2,
+                label=f'Mean: {np.nanmean(height_data):.2f}m')
+    ax1.axvline(np.nanmedian(height_data), color='orange', linestyle='--', linewidth=2,
+                label=f'Median: {np.nanmedian(height_data):.2f}m')
+    ax1.set_xlabel('Canopy Height (m)', fontsize=12)
+    ax1.set_ylabel('Frequency', fontsize=12)
+    ax1.set_title('Height Distribution', fontsize=12, fontweight='bold')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Statistics
+    ax2 = axes[1]
+    ax2.set_xlim(0, 1)
+    ax2.set_ylim(0, 1)
+    ax2.axis('off')
+
+    stats_text = f"""MAP STATISTICS
+==============
+Mean Height:      {np.nanmean(height_data):.2f} m
+Median Height:    {np.nanmedian(height_data):.2f} m
+Std Deviation:    {np.nanstd(height_data):.2f} m
+Min Height:       {np.nanmin(height_data):.2f} m
+Max Height:       {np.nanmax(height_data):.2f} m
+
+COVERAGE
+========
+Valid Pixels:     {np.sum(np.isfinite(height_data)):,}
+NoData Pixels:    {np.sum(~np.isfinite(height_data)):,}
+Total Pixels:     {height_data.size:,}
+
+PERCENTILES
+===========
+25th percentile:  {np.nanpercentile(height_data, 25):.2f} m
+50th percentile:  {np.nanpercentile(height_data, 50):.2f} m
+75th percentile:  {np.nanpercentile(height_data, 75):.2f} m
+95th percentile:  {np.nanpercentile(height_data, 95):.2f} m"""
+
+    # Place text with proper margins on all sides
+    ax2.text(0.05, 0.92, stats_text, transform=ax2.transAxes,
+            fontsize=11, verticalalignment='top', fontfamily='monospace',
+            bbox=dict(boxstyle='round,pad=1', facecolor='wheat', alpha=0.3))
+
+    fig.suptitle(title, fontsize=14, fontweight='bold')
+
+    if output_dir:
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        plt.savefig(f'{output_dir}/canopy_height_stats.png', dpi=300, bbox_inches='tight')
+        print(f"  Saved: {output_dir}/canopy_height_stats.png")
+    plt.close(fig)
 
     return fig
 
@@ -779,23 +832,45 @@ def create_pipeline_summary(gedi_csv, s2_tif, height_map_path, model_stats,
         ax4.text(0.5, 0.5, 'Feature importance\nnot available',
                 ha='center', va='center', transform=ax4.transAxes)
 
-    # Final canopy height map
+    # Final canopy height map - reproject to WGS84 for lat/lon display
     ax5 = fig.add_subplot(gs[1, :])
     with rasterio.open(height_map_path) as src:
         height_data = src.read(1)
-        extent = [src.bounds.left, src.bounds.right, src.bounds.bottom, src.bounds.top]
-    im = ax5.imshow(height_data, extent=extent, cmap='RdYlGn', vmin=0, vmax=50, origin='lower')
+        src_crs = src.crs
+        src_transform = src.transform
+        src_width = src.width
+        src_height = src.height
+
+    # Reproject to WGS84
+    from rasterio.warp import calculate_default_transform, reproject, Resampling
+    from pyproj import CRS
+    import rasterio
+    dst_crs = CRS.from_epsg(4326)
+    transform, width, height = calculate_default_transform(
+        src_crs, dst_crs, src_width, src_height, *src.bounds)
+    reprojected = np.zeros((height, width), dtype=np.float32)
+    with rasterio.open(height_map_path) as src:
+        reproject(
+            source=rasterio.band(src, 1),
+            destination=reprojected,
+            src_transform=src_transform,
+            src_crs=src_crs,
+            dst_transform=transform,
+            dst_crs=dst_crs,
+            resampling=Resampling.bilinear)
+
+    # Calculate extent in lat/lon
+    min_lon, min_lat = transform * (0, 0)
+    max_lon, max_lat = transform * (width, height)
+    extent = [min_lon, max_lon, min_lat, max_lat]
+
+    im = ax5.imshow(reprojected, extent=extent, cmap='YlGnBu', vmin=0, vmax=50, origin='lower')
     ax5.set_title('Final Canopy Height Map', fontsize=14, fontweight='bold')
     ax5.set_xlabel('Longitude')
     ax5.set_ylabel('Latitude')
     cbar = plt.colorbar(im, ax=ax5, fraction=0.02, pad=0.04)
     cbar.set_label('Height (m)', fontsize=12)
-
-    # Overlay GEDI points
-    ax5.scatter(gedi['longitude'], gedi['latitude'],
-               c=gedi['rh98'], cmap='RdYlGn', s=5,
-               edgecolors='black', linewidths=0.5, alpha=0.8,
-               vmin=0, vmax=50)
+    # No GEDI points overlay
 
     fig.suptitle('Canopy Height Mapping Pipeline Summary',
                 fontsize=16, fontweight='bold')
