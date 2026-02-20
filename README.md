@@ -20,7 +20,7 @@ This pipeline generates high-resolution canopy height maps by training a Random 
 | **GEDI L2A** | Spaceborne lidar | Training labels (canopy height measurements) |
 | **Sentinel-2** | Multispectral optical | Predictor variables (spectral bands, indices) |
 | **Sentinel-1** | Synthetic aperture radar | Optional predictor (backscatter, texture) |
-| **SRTM** | Digital elevation model | Topographic features (elevation, slope) |
+| **COP30 / SRTM** | Digital elevation model | Topographic features (elevation, slope) |
 
 ## Installation
 
@@ -58,7 +58,10 @@ Your `.env` file should look like this:
 ```bash
 EARTHDATA_USERNAME=your_actual_username
 EARTHDATA_PASSWORD=your_actual_password
+OPENTOPOGRAPHY_API_KEY=your_opentopography_api_key
 ```
+
+**Optional**: Get a free OpenTopography API key at https://portal.opentopography.org/ to avoid rate limits when downloading elevation data.
 
 > **Note**: The `.env` file is ignored by git (see `.gitignore`) and will never be uploaded to GitHub, keeping your credentials safe.
 
@@ -88,14 +91,16 @@ gedi_csv = download_gedi_earthaccess(bbox, start_date, end_date,
                                      f'{output_dir}/gedi.csv')
 s2_path = download_sentinel2_mpc(bbox, start_date, end_date,
                                  f'{output_dir}/s2.tif')
-topo_path = download_srtm_opentopography(bbox, f'{output_dir}/topo.tif')
+s1_path = download_sentinel1_mpc(bbox, start_date, end_date,
+                                 f'{output_dir}/s1.tif')  # Optional
+topo_path = download_srtm_opentopography(bbox, f'{output_dir}/topo.tif')  # COP30 by default
 
 # Train model
-X, y, features = extract_features(gedi_csv, s2_path, None, topo_path)
+X, y, features = extract_features(gedi_csv, s2_path, s1_path, topo_path)
 model = train_model(X, y, features)
 
 # Generate map
-predict_map(model, s2_path, None, topo_path,
+predict_map(model, s2_path, s1_path, topo_path,
             f'{output_dir}/height_map.tif')
 ```
 
@@ -130,8 +135,8 @@ canopy_height_app/
 ### Data Acquisition
 - `download_gedi_earthaccess()` - Download GEDI L2A data via NASA EarthData
 - `download_sentinel2_mpc()` - Download Sentinel-2 via Microsoft Planetary Computer
-- `download_sentinel1_mpc()` - Download Sentinel-1 GRD data
-- `download_srtm_opentopography()` - Download SRTM elevation data
+- `download_sentinel1_mpc()` - Download Sentinel-1 GRD data (optional, may return None)
+- `download_srtm_opentopography()` - Download COP30 or SRTM elevation data
 
 ### Model Training
 - `extract_features()` - Extract and align features from all data sources
@@ -140,11 +145,14 @@ canopy_height_app/
 ### Prediction
 - `predict_map()` - Generate wall-to-wall canopy height prediction
 
-### Validation & Visualization
+### Validation & Visualization (visualizations.py)
+- `plot_model_validation()` - Comprehensive validation plots (scatter, residuals, feature importance)
+- `plot_canopy_height_map()` - Visualize predicted canopy height map (reprojected to WGS84)
+- `plot_canopy_height_stats()` - Histogram and statistics panel
+- `create_pipeline_summary()` - Multi-panel pipeline overview
+
+### Validation Metrics (validation.py)
 - `validate_predictions()` - Calculate accuracy metrics (R², RMSE, bias)
-- `plot_prediction_scatter()` - Scatter plot of predicted vs observed
-- `plot_height_map()` - Visualize predicted canopy height map
-- `plot_feature_importance()` - Display Random Forest feature importance
 
 ## Output Files
 
@@ -187,7 +195,8 @@ The pipeline generates the following outputs:
 - The pipeline includes automatic reprojection handling
 
 **Rate limiting on OpenTopography**
-- Use the alternative SRTM download function included
+- Add `OPENTOPOGRAPHY_API_KEY` to your `.env` file (get free key at https://portal.opentopography.org/)
+- Pipeline automatically falls back to NASA EarthData SRTM if OpenTopography fails
 
 **Shape mismatch (different UTM zones)**
 - Pipeline automatically handles reprojection to a common grid
