@@ -8,12 +8,17 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.gridspec import GridSpec
-import seaborn as sns
 from pathlib import Path
 
-# Set style for publication-quality figures
-plt.style.use('seaborn-v0_8-darkgrid')
-sns.set_palette("husl")
+# Optional seaborn import
+try:
+    import seaborn as sns
+    # Set style for publication-quality figures
+    plt.style.use('seaborn-v0_8-darkgrid')
+    sns.set_palette("husl")
+except ImportError:
+    # seaborn not available, use default matplotlib style
+    plt.style.use('bmh')
 
 
 # ============================================================================
