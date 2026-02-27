@@ -1234,28 +1234,29 @@ def train_model(X, y, names):
     print("\n" + "="*60)
     print("Training Model")
     print("="*60 + "\n")
-    
+
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
+
     model = RandomForestRegressor(
-        n_estimators=100, max_depth=20,
-        min_samples_split=5, random_state=42, n_jobs=-1
-    )    
+        n_estimators=500, max_depth=30,
+        min_samples_split=10, min_samples_leaf=2,
+        max_features='log2', random_state=42, n_jobs=-1
+    )
     model.fit(X_train, y_train)
-    
+
     y_pred = model.predict(X_test)
     r2 = r2_score(y_test, y_pred)
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    
+
     print(f"R²: {r2:.3f}, RMSE: {rmse:.2f} m")
-    
+
     # Top features
     imp = pd.DataFrame({'feature': names, 'importance': model.feature_importances_})
     imp = imp.sort_values('importance', ascending=False)
     print("\nTop 5 Features:")
     for _, row in imp.head(5).iterrows():
         print(f"  {row['feature']}: {row['importance']:.3f}")
-    
+
     return model
 
 
