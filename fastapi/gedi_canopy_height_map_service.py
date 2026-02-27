@@ -206,13 +206,19 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 
 
 @router.post(
-    "/GEDI_canopy_height_map",
-    operation_id="gedi_canopy_height_mapping",
+    "/v1/GEDI_canopy_height_map",
+    operation_id="gedi_canopy_height_mapping_v1",
     include_in_schema=True,
-    summary="Generate GEDI Canopy Height Map (V2)",
+    summary="Generate GEDI Canopy Height Map (V1)",
     description="""
 Generate wall-to-wall canopy height predictions using GEDI L2A lidar data
 and Sentinel satellite imagery with user-configurable parameters.
+
+**NEW in V1:**
+- Latitude/longitude coordinates added as input features (improves regional accuracy)
+- 10 Sentinel-2 bands (full multispectral)
+- 3 DEM bands (elevation, slope, aspect)
+- Uses global GEDI partitions (gedi_global_2024_2025/)
 
 **Parameters:**
 - **Bounding box**: Area of interest (min_lon, min_lat, max_lon, max_lat)

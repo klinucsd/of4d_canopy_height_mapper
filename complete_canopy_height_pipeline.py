@@ -1214,11 +1214,18 @@ def extract_features(gedi_csv, s2_tif, s1_tif, topo_tif):
     # Remove rows containing NaN or Infinite values
     valid = ~(np.isnan(X).any(axis=1) | np.isinf(X).any(axis=1) | np.isnan(y))
     X, y = X[valid], y[valid]
-    
-    # FIXED: Return the already constructed names_list
-    final_features = names_list 
-    
+
+    # Also filter coords to match valid samples
+    lons_filtered = lons[valid]
+    lats_filtered = lats[valid]
+
+    # Add latitude and longitude as features (for region-specific modeling)
+    coords_features = np.column_stack([lats_filtered, lons_filtered])
+    X = np.column_stack([X, coords_features])
+    final_features = names_list + ['latitude', 'longitude']
+
     print(f"Final training samples: {len(X)}")
+    print(f"Total features: {len(final_features)} (including latitude, longitude)")
     return X, y, final_features
 
 
@@ -1253,15 +1260,38 @@ def train_model(X, y, names):
 
 
 def predict_map(model, s2_tif, s1_tif, topo_tif, output='canopy_height.tif'):
-    """Generate height map"""
+    """Generate height map with lat/lon coordinate features
+
+    Now includes latitude and longitude as input features (18 features total:
+    10 Sentinel-2 bands + 3 topographic bands + 2 Sentinel-1 bands + 2 coordinate bands + 1 NDVI)
+    """
     print("\n" + "="*60)
     print("Generating Height Map")
     print("="*60 + "\n")
-    
+
+    import numpy as np
+    import rasterio
+    from rasterio.warp import reproject, Resampling
+    import os
+
     with rasterio.open(s2_tif) as s2_src:
         s2_data = s2_src.read()
         profile = s2_src.profile
-        
+
+        # Get coordinate grids for latitude and longitude
+        h, w = s2_data.shape[1], s2_data.shape[2]
+
+        # Create coordinate arrays
+        # Get the coordinates of each pixel center
+        rows, cols = np.indices((h, w))
+        transform = s2_src.transform
+
+        # Convert pixel coordinates to lat/lon
+        # Formula: lon = transform[2] + col * transform[0] + row * transform[1]
+        #         lat = transform[5] + col * transform[3] + row * transform[4]
+        lons = transform[2] + cols * transform[0] + rows * transform[1]
+        lats = transform[5] + cols * transform[3] + rows * transform[4]
+
         # Resample S1
         if s1_tif and os.path.exists(s1_tif):
             with rasterio.open(s1_tif) as s1_src:
@@ -1275,7 +1305,7 @@ def predict_map(model, s2_tif, s1_tif, topo_tif, output='canopy_height.tif'):
                     )
         else:
             s1_data = np.array([]).reshape(0, s2_data.shape[1], s2_data.shape[2])
-        
+
         # Resample topo
         with rasterio.open(topo_tif) as topo_src:
             topo_data = np.zeros((topo_src.count, s2_data.shape[1], s2_data.shape[2]))
@@ -1286,13 +1316,22 @@ def predict_map(model, s2_tif, s1_tif, topo_tif, output='canopy_height.tif'):
                     dst_transform=s2_src.transform, dst_crs=s2_src.crs,
                     resampling=Resampling.bilinear
                 )
-    
-    # Stack
+
+    # Stack features and save shape for later use
+    h, w = s2_data.shape[1], s2_data.shape[2]
+
     all_data = np.vstack([s2_data, s1_data, topo_data]) if s1_data.shape[0] > 0 else np.vstack([s2_data, topo_data])
-    
+
+    # Add lat/lon as features (reshape to match data format)
+    lat_flat = lats.reshape(-1, 1)
+    lon_flat = lons.reshape(-1, 1)
+    coords_data = np.hstack([lat_flat, lon_flat])
+
+    # Combine: [features, lat, lon]
+    all_data_with_coords = np.vstack([all_data.reshape(all_data.shape[0], -1), coords_data.T])
+
     # Predict
-    n_feat, h, w = all_data.shape
-    data_2d = all_data.reshape(n_feat, -1).T
+    data_2d = all_data_with_coords.T
     
     valid = np.all(np.isfinite(data_2d), axis=1) & np.all(np.abs(data_2d) < 1e10, axis=1)
     print(f"Valid pixels: {valid.sum()}/{len(valid)} ({valid.sum()/len(valid)*100:.1f}%)")
@@ -1310,6 +1349,84 @@ def predict_map(model, s2_tif, s1_tif, topo_tif, output='canopy_height.tif'):
     
     print(f"✓ Saved: {output}")
     print(f"  Mean: {np.nanmean(pred):.1f} m, Max: {np.nanmax(pred):.1f} m")
+
+
+# ============================================================================
+# HELPER: Load GEDI from Local Partitions
+# ============================================================================
+
+def load_gedi_from_partitions(bbox, output_csv='gedi.csv', gedi_dir='gedi_global_2024_2025'):
+    """
+    Load GEDI data from local partition folders.
+
+    Parameters:
+    -----------
+    bbox : list
+        [min_lon, min_lat, max_lon, max_lat]
+    output_csv : str
+        Path to save combined GEDI CSV
+    gedi_dir : str
+        Path to GEDI partition directory
+
+    Returns:
+    --------
+    str : Path to combined GEDI CSV
+    """
+    import pandas as pd
+    from pathlib import Path
+
+    min_lon, min_lat, max_lon, max_lat = bbox
+
+    gedi_path = Path(gedi_dir)
+    if not gedi_path.exists():
+        raise Exception(f"GEDI directory not found: {gedi_dir}")
+
+    print(f"  BBox: {bbox}")
+
+    partition_folders = [d for d in gedi_path.iterdir() if d.is_dir() and d.name.startswith('lat_')]
+    print(f"  Found {len(partition_folders)} partition folders")
+
+    all_data = []
+
+    for folder in sorted(partition_folders):
+        parts = folder.name.split('_')
+        if len(parts) >= 4:
+            try:
+                lat = float(parts[1])
+                lon = float(parts[3])
+            except ValueError:
+                continue
+
+            if (min_lon <= lon <= max_lon) and (min_lat <= lat <= max_lat):
+                pq_file = folder / 'part.parquet'
+                if pq_file.exists():
+                    try:
+                        df = pd.read_parquet(pq_file)
+                        df = df[
+                            (df['longitude'] >= min_lon) &
+                            (df['longitude'] <= max_lon) &
+                            (df['latitude'] >= min_lat) &
+                            (df['latitude'] <= max_lat)
+                        ]
+                        if len(df) > 0:
+                            all_data.append(df)
+                    except Exception:
+                        continue
+
+    if not all_data:
+        raise Exception(f"No GEDI data found in bbox {bbox}")
+
+    combined = pd.concat(all_data, ignore_index=True)
+    combined = combined.drop_duplicates(subset=['longitude', 'latitude'])
+
+    output_path = Path(output_csv)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(output_path, index=False)
+
+    print(f"  ✓ Loaded {len(combined):,} GEDI points")
+    print(f"  ✓ Saved to: {output_path}")
+
+    return str(output_path)
 
 
 # ============================================================================
@@ -1335,29 +1452,19 @@ if __name__ == "__main__":
     print("CANOPY HEIGHT MAPPING PIPELINE")
     print("="*60 + "\n")
     
-    # STEP 1: Download GEDI (choose method)
+    # STEP 1: Load GEDI from local partitions (FAST - uses gedi_global_2024_2025/)
     print("STEP 1: GEDI Data\n")
-    
-    # METHOD A: earthaccess (RECOMMENDED - gets 10-100x more data!)
-    gedi_csv = download_gedi_earthaccess(bbox, start_date, end_date, 
-                                         f'{output_dir}/gedi_raw.csv')
-    
-    # If METHOD A fails, try existing file
+    print("Loading GEDI from local partitions (gedi_global_2024_2025/)...")
+
+    # Load from local global partitions
+    gedi_csv = load_gedi_from_partitions(
+        bbox,
+        output_csv=f'{output_dir}/gedi_raw.csv',
+        gedi_dir='gedi_global_2024_2025'
+    )
+
     if gedi_csv is None:
-        print("\nTrying existing GEDI file...")
-        for f in ['gedi_downloads/GEDI_L2A_rh98_2019-04-01_2024-12-31_clean.csv',
-                  'gedi_downloads/GEDI_L2A_rh98_2019-04-01_2024-12-31.csv']:
-            if os.path.exists(f):
-                df = pd.read_csv(f)
-                df_bbox = df[(df['longitude'] >= bbox[0]) & (df['longitude'] <= bbox[2]) &
-                            (df['latitude'] >= bbox[1]) & (df['latitude'] <= bbox[3])]
-                gedi_csv = f'{output_dir}/gedi_raw.csv'
-                df_bbox.to_csv(gedi_csv, index=False)
-                print(f"✓ Using existing file: {len(df_bbox)} points")
-                break
-    
-    if gedi_csv is None:
-        raise Exception("No GEDI data available!")
+        raise Exception("Failed to load GEDI from local partitions!")
     
     # Augment if sparse
     df = pd.read_csv(gedi_csv)

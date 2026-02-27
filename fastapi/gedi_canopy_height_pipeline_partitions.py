@@ -855,9 +855,17 @@ def extract_features(gedi_csv, s2_tif, s1_tif, topo_tif):
     valid = ~(np.isnan(X).any(axis=1) | np.isinf(X).any(axis=1) | np.isnan(y))
     X, y = X[valid], y[valid]
 
-    final_features = names_list
+    # Also filter coords to match valid samples
+    lons_filtered = lons[valid]
+    lats_filtered = lats[valid]
+
+    # Add latitude and longitude as features (for region-specific modeling)
+    coords_features = np.column_stack([lats_filtered, lons_filtered])
+    X = np.column_stack([X, coords_features])
+    final_features = names_list + ['latitude', 'longitude']
 
     print(f"Final training samples: {len(X)}")
+    print(f"Total features: {len(final_features)} (including latitude, longitude)")
     return X, y, final_features
 
 
@@ -891,7 +899,7 @@ def train_model(X, y, names):
 
 
 def predict_map(model, s2_tif, s1_tif, topo_tif, output='canopy_height.tif'):
-    """Generate height map."""
+    """Generate height map with lat/lon coordinate features."""
     print("\n" + "="*60)
     print("Generating Height Map")
     print("="*60 + "\n")
@@ -899,6 +907,17 @@ def predict_map(model, s2_tif, s1_tif, topo_tif, output='canopy_height.tif'):
     with rasterio.open(s2_tif) as s2_src:
         s2_data = s2_src.read()
         profile = s2_src.profile
+
+        # Get coordinate grids for latitude and longitude
+        h, w = s2_data.shape[1], s2_data.shape[2]
+
+        # Create coordinate arrays
+        rows, cols = np.indices((h, w))
+        transform = s2_src.transform
+
+        # Convert pixel coordinates to lat/lon
+        lons = transform[2] + cols * transform[0] + rows * transform[1]
+        lats = transform[5] + cols * transform[3] + rows * transform[4]
 
         if s1_tif and os.path.exists(s1_tif):
             with rasterio.open(s1_tif) as s1_src:
@@ -923,10 +942,19 @@ def predict_map(model, s2_tif, s1_tif, topo_tif, output='canopy_height.tif'):
                     resampling=Resampling.bilinear
                 )
 
+    # Stack features
     all_data = np.vstack([s2_data, s1_data, topo_data]) if s1_data.shape[0] > 0 else np.vstack([s2_data, topo_data])
 
-    n_feat, h, w = all_data.shape
-    data_2d = all_data.reshape(n_feat, -1).T
+    # Add lat/lon as features (reshape to match data format)
+    lat_flat = lats.reshape(-1, 1)
+    lon_flat = lons.reshape(-1, 1)
+    coords_data = np.hstack([lat_flat, lon_flat])
+
+    # Combine: [features, lat, lon]
+    all_data_with_coords = np.vstack([all_data.reshape(all_data.shape[0], -1), coords_data.T])
+
+    # Predict
+    data_2d = all_data_with_coords.T
 
     valid = np.all(np.isfinite(data_2d), axis=1) & np.all(np.abs(data_2d) < 1e10, axis=1)
     print(f"Valid pixels: {valid.sum()}/{len(valid)} ({valid.sum()/len(valid)*100:.1f}%)")
