@@ -38,3 +38,11 @@ full_outputs/
 Thumbs.db
 
 gedi_global_2024_2025/
+
+# Local and temporary files
+local/
+*.log
+*_report.md
+*_NOTE.md
+*_REPORT.md
+empty_*.txt
