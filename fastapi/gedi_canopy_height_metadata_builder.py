@@ -284,7 +284,8 @@ def build_metadata_from_job(output_dir: str, job_id: str, output_url: str,
                             sentinel_temporal_min: str, sentinel_temporal_max: str,
                             cloud_threshold: int, s1_available: bool,
                             dem_dataset: str, model, X_train, y_test, y_pred,
-                            features, ml_algorithm: str, execution_time_minutes: float) -> str:
+                            features, ml_algorithm: str, execution_time_minutes: float,
+                            s2_scenes_used: int = 0) -> str:
     """
     Convenience function to build complete metadata from job parameters.
 
@@ -300,7 +301,7 @@ def build_metadata_from_job(output_dir: str, job_id: str, output_url: str,
     builder.add_canopy_height_info(output_dir)
     builder.add_gedi_metadata(gedi_csv, gedi_dir, gedi_temporal_min, gedi_temporal_max)
     builder.add_sentinel_metadata(output_dir, sentinel_temporal_min, sentinel_temporal_max,
-                                   cloud_threshold, s1_available)
+                                   cloud_threshold, s1_available, s2_scenes_used)
     builder.add_topography_metadata(output_dir, dem_dataset)
     builder.add_model_training_metadata(model, X_train, y_test, y_pred, features, ml_algorithm)
     builder.add_prediction_results(output_dir)

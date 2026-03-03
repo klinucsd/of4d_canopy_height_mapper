@@ -475,7 +475,8 @@ def main():
             y_pred=y_pred,
             features=features,
             ml_algorithm=args.ml_algorithm,
-            execution_time_minutes=execution_minutes
+            execution_time_minutes=execution_minutes,
+            s2_scenes_used=s2_scenes_used
         )
         print(f"✓ Saved metadata to {args.output_dir}/metadata.json")
     except Exception as e:
