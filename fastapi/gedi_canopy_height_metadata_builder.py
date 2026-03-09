@@ -214,7 +214,16 @@ class MetadataBuilder:
             model_info["parameters"] = {
                 "n_estimators": int(model.n_estimators),
                 "max_depth": int(model.max_depth),
-                "min_samples_split": int(model.min_samples_split)
+                "min_samples_split": int(model.min_samples_split),
+                "min_samples_leaf": int(model.min_samples_leaf),
+                "max_features": model.max_features,
+            }
+        elif ml_algorithm == "HGB":
+            model_info["parameters"] = {
+                "max_iter": int(model.max_iter),
+                "learning_rate": float(model.learning_rate),
+                "max_leaf_nodes": model.max_leaf_nodes,
+                "min_samples_leaf": int(model.min_samples_leaf),
             }
 
         # Add feature importance if available

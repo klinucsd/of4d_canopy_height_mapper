@@ -155,7 +155,7 @@ class GediCanopyHeightRequest(BaseModel):
     # ML algorithm
     ML_algorithm: str = Field(
         default="RFR",
-        description="ML algorithm: RFR (Random Forest), extensible for XGBoost, etc."
+        description="ML algorithm: RFR (Random Forest Regressor), HGB (Hist Gradient Boosting)"
     )
 
     # Resolution
@@ -169,7 +169,7 @@ class GediCanopyHeightRequest(BaseModel):
     @validator('ML_algorithm')
     def validate_algorithm(cls, v):
         """Validate ML algorithm is supported"""
-        supported = ["RFR"]  # Add more as they are implemented
+        supported = ["RFR", "HGB"]
         if v not in supported:
             raise ValueError(f'Unsupported algorithm: {v}. Supported: {", ".join(supported)}')
         return v
@@ -206,7 +206,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 
 
 @router.post(
-    "/v1/GEDI_canopy_height_map",
+    "/GEDI_canopy_height_map",
     operation_id="gedi_canopy_height_mapping_v1",
     include_in_schema=True,
     summary="Generate GEDI Canopy Height Map (V1)",
@@ -304,11 +304,6 @@ async def execute_gedi_canopy_height(
     if db_job is None:
         raise HTTPException(status_code=500, detail="Failed to create job entry in the database")
 
-    # Calculate output_url and update immediately
-    host_url = utils.get_full_hostname()
-    output_url = f"{host_url}/output/{service_id}"
-    update_job_status(db_job.id, status="Pending", output_url=output_url)
-
     # Build the command for the worker script
     script_path = os.path.join(SCRIPTS_DIR, "gedi_canopy_height_map.py")
 
@@ -342,7 +337,7 @@ async def execute_gedi_canopy_height(
     def run_job_with_metadata(db_job_id, command, working_directory, service_id, request_params):
         """Run the canopy height job and update status"""
         import signal
-        from utils import update_job_status, get_full_hostname
+        from utils import get_full_hostname
 
         def _tail_file(path, max_bytes=8192):
             try:
@@ -534,7 +529,12 @@ async def execute_gedi_canopy_height(
                 logger.error(f"Failed to save metadata.json: {e}")
 
     # Submit the job to the executor
+    host_url = utils.get_full_hostname()
+    output_url = f"{host_url}/output/{service_id}"
+
     try:
+        update_job_status(db_job.id, status="Processing", output_url=output_url)
+
         utils.executor.submit(run_job_with_metadata, db_job.id, command, working_directory, service_id, request_params)
         logger.info(f"Job {db_job.id} submitted to executor. Job ID: {service_id}")
     except MemoryError:
@@ -545,7 +545,6 @@ async def execute_gedi_canopy_height(
         raise HTTPException(status_code=500, detail=f"Failed to submit job: {e}")
 
     # Return immediately with job ID and status URL
-    host_url = utils.get_full_hostname()
     return {
         "jobID": service_id,
         "status_url": f"{host_url}/output/{service_id}",

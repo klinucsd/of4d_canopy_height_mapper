@@ -46,3 +46,9 @@ local/
 *_NOTE.md
 *_REPORT.md
 empty_*.txt
+
+# Test outputs
+tests/*/
+!tests/.gitkeep
+!tests/**/*.py
+!tests/**/*.md

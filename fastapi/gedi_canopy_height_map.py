@@ -88,34 +88,38 @@ def get_model(ml_algorithm="RFR", **kwargs):
     model : sklearn estimator
         Configured ML model
     """
-    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.ensemble import RandomForestRegressor, HistGradientBoostingRegressor
 
-    algorithms = {
-        "RFR": RandomForestRegressor,
-        # Future algorithms can be added here:
-        # "XGB": XGBRegressor,
-        # "SVR": SVR,
-    }
-
-    if ml_algorithm not in algorithms:
-        raise ValueError(f"Unsupported algorithm: {ml_algorithm}. Supported: {list(algorithms.keys())}")
-
-    model_class = algorithms[ml_algorithm]
+    supported = ["RFR", "HGB"]
+    if ml_algorithm not in supported:
+        raise ValueError(f"Unsupported algorithm: {ml_algorithm}. Supported: {supported}")
 
     if ml_algorithm == "RFR":
-        return model_class(
+        return RandomForestRegressor(
             n_estimators=kwargs.get('n_estimators', 100),
             max_depth=kwargs.get('max_depth', 20),
             min_samples_split=kwargs.get('min_samples_split', 5),
+            min_samples_leaf=kwargs.get('min_samples_leaf', 20),
+            max_features=kwargs.get('max_features', None),
             random_state=42,
-            n_jobs=-1
+            n_jobs=-1,
+        )
+
+    if ml_algorithm == "HGB":
+        return HistGradientBoostingRegressor(
+            max_iter=kwargs.get('max_iter', 300),
+            learning_rate=kwargs.get('learning_rate', 0.1),
+            max_leaf_nodes=kwargs.get('max_leaf_nodes', 31),
+            min_samples_leaf=kwargs.get('min_samples_leaf', 20),
+            random_state=42,
         )
 
     raise ValueError(f"Model configuration not implemented for: {ml_algorithm}")
 
 
 def generate_all_visualizations(output_dir, gedi_csv, s2_tif, s1_tif, topo_tif,
-                                height_map_tif, model, X_test, y_test, y_pred, features):
+                                height_map_tif, model, X_test, y_test, y_pred, features,
+                                ml_algorithm="RFR"):
     """
     Generate all required visualization PNGs.
 
@@ -165,7 +169,7 @@ def generate_all_visualizations(output_dir, gedi_csv, s2_tif, s1_tif, topo_tif,
     try:
         feature_importance = model.feature_importances_ if hasattr(model, 'feature_importances_') else None
         viz.plot_model_validation(y_test, y_pred, features, feature_importance,
-                                  model_name="Random Forest", output_dir=output_dir)
+                                  model_name=ml_algorithm, output_dir=output_dir)
     except Exception as e:
         print(f"    ⚠ Model validation: {e}")
 
@@ -367,8 +371,11 @@ def main():
     print("\n[3/5] Training model...")
 
     try:
-        X, y, features = chp.extract_features(gedi_csv, s2_path, s1_path, topo_path)
-        print(f"✓ Extracted {len(X)} samples with {len(features)} features")
+        X, y, features, n_total, n_clean, label_filter = chp.extract_features(
+            gedi_csv, s2_path, s1_path, topo_path, bbox)
+        print(f"✓ Extracted {n_clean} clean samples of {n_total} total "
+              f"({n_clean/n_total*100:.1f}%) — filter: {label_filter}")
+        print(f"  Features: {len(features)}")
     except Exception as e:
         print(f"Error extracting features: {e}", file=sys.stderr)
         return 1
@@ -377,7 +384,7 @@ def main():
         print(f"Error: Too few samples ({len(X)}) for training", file=sys.stderr)
         return 1
 
-    # Train model using factory function
+    # Train model using factory function — split on already-filtered clean shots
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
@@ -412,8 +419,10 @@ def main():
         "r2": float(r2),
         "rmse_m": float(rmse),
         "mae_m": float(mae),
-        "n_samples": len(X),
-        "n_features": len(features)
+        "n_samples_total": n_total,
+        "n_samples_clean": n_clean,
+        "label_filter": label_filter,
+        "n_features": len(features),
     }
     metrics_path = os.path.join(args.output_dir, "metrics.json")
     with open(metrics_path, 'w') as f:
@@ -427,7 +436,7 @@ def main():
 
     output_tif = os.path.join(args.output_dir, "canopy_height_map.tif")
     try:
-        chp.predict_map(model, s2_path, s1_path, topo_path, output_tif)
+        chp.predict_map(model, s2_path, s1_path, topo_path, bbox, output_tif)
     except Exception as e:
         print(f"Error generating height map: {e}", file=sys.stderr)
         return 1
@@ -441,7 +450,8 @@ def main():
     try:
         generate_all_visualizations(
             args.output_dir, gedi_csv, s2_path, s1_path, topo_path,
-            output_tif, model, X_test, y_test, y_pred, features
+            output_tif, model, X_test, y_test, y_pred, features,
+            ml_algorithm=args.ml_algorithm,
         )
     except Exception as e:
         print(f"    ⚠ Some visualizations failed: {e}")
@@ -476,7 +486,7 @@ def main():
             features=features,
             ml_algorithm=args.ml_algorithm,
             execution_time_minutes=execution_minutes,
-            s2_scenes_used=s2_scenes_used
+            s2_scenes_used=s2_scenes_used,
         )
         print(f"✓ Saved metadata to {args.output_dir}/metadata.json")
     except Exception as e:

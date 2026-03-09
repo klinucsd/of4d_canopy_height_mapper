@@ -161,7 +161,10 @@ def process_single_granule(h5_file_path, bbox=None):
                     lon = f[f'{beam}/lon_lowestmode'][:]
                     rh = f[f'{beam}/rh'][:]
                     rh98 = rh[:, 98]
+                    rh50 = rh[:, 50]
                     quality = f[f'{beam}/quality_flag'][:]
+                    sensitivity = f[f'{beam}/sensitivity'][:]
+                    degrade = f[f'{beam}/degrade_flag'][:]
 
                     # Valid shots (allow tall trees like Redwoods >100m)
                     # Upper limit of 130m covers Hyperion (115.9m) with margin
@@ -181,6 +184,9 @@ def process_single_granule(h5_file_path, bbox=None):
                     lat_valid = lat[valid]
                     lon_valid = lon[valid]
                     rh98_valid = rh98[valid]
+                    rh50_valid = rh50[valid]
+                    sensitivity_valid = sensitivity[valid]
+                    degrade_valid = degrade[valid]
 
                     # Vectorized partition assignment (100x+ faster than loop)
                     lat_floor = np.floor(lat_valid).astype(int)
@@ -191,6 +197,9 @@ def process_single_granule(h5_file_path, bbox=None):
                         'latitude': lat_valid,
                         'longitude': lon_valid,
                         'rh98': rh98_valid,
+                        'rh50': rh50_valid,
+                        'sensitivity': sensitivity_valid,
+                        'degrade_flag': degrade_valid,
                         '_lat_key': lat_floor,
                         '_lon_key': lon_floor
                     })
@@ -202,7 +211,8 @@ def process_single_granule(h5_file_path, bbox=None):
                             partitions[key] = []
                         # Use to_dict('records') for fast conversion
                         partitions[key].extend(
-                            group[['latitude', 'longitude', 'rh98']].to_dict('records')
+                            group[['latitude', 'longitude', 'rh98',
+                                   'rh50', 'sensitivity', 'degrade_flag']].to_dict('records')
                         )
 
                 except Exception:

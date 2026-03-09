@@ -16,9 +16,11 @@ import numpy as np
 from dotenv import load_dotenv
 load_dotenv()
 import pandas as pd
-import rasterio
-from rasterio.warp import reproject, Resampling
 import requests
+import rasterio
+from rasterio.io import MemoryFile
+from rasterio.warp import reproject, Resampling
+from pyproj import Transformer
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_squared_error
@@ -26,6 +28,97 @@ import pystac_client
 import planetary_computer
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
+
+
+# ============================================================================
+# LABEL CLEANING & WORLDCOVER HELPERS  (manager config, 2026-03-09)
+# ============================================================================
+
+_CONUS_BBOX = (-125.0, 24.0, -66.0, 50.0)
+_NLCD_WMS   = 'https://www.mrlc.gov/geoserver/mrlc_display/wms'
+_NLCD_LAYER = 'NLCD_2021_Impervious_L48'
+
+
+def is_conus_bbox(bbox):
+    """Return True if bbox overlaps the contiguous United States."""
+    min_lon, min_lat, max_lon, max_lat = bbox
+    return (min_lon < _CONUS_BBOX[2] and max_lon > _CONUS_BBOX[0] and
+            min_lat < _CONUS_BBOX[3] and max_lat > _CONUS_BBOX[1])
+
+
+def _get_nlcd_clean_mask(lons, lats, bbox, threshold_pct=10):
+    """Return boolean array (True = clean) via NLCD 2021 WMS (CONUS only)."""
+    min_lon, min_lat, max_lon, max_lat = bbox
+    buf = 0.05
+    wms_bbox = f'{min_lon-buf},{min_lat-buf},{max_lon+buf},{max_lat+buf}'
+    pixel_size_deg = 0.0003
+    width  = max(100, int(round((max_lon - min_lon + 2*buf) / pixel_size_deg)))
+    height = max(100, int(round((max_lat - min_lat + 2*buf) / pixel_size_deg)))
+    params = {
+        'service': 'WMS', 'version': '1.1.1', 'request': 'GetMap',
+        'layers': _NLCD_LAYER, 'bbox': wms_bbox,
+        'width': str(width), 'height': str(height),
+        'srs': 'EPSG:4326', 'format': 'image/geotiff', 'styles': '',
+    }
+    print(f'  Downloading NLCD 2021 impervious ({width}x{height} px) from MRLC WMS...')
+    resp = requests.get(_NLCD_WMS, params=params, timeout=120)
+    resp.raise_for_status()
+    with MemoryFile(resp.content) as mf:
+        with mf.open() as ds:
+            data      = ds.read(1).astype(np.uint8)
+            transform = ds.transform
+    data[data > 100] = 0
+    rows = np.asarray(rasterio.transform.rowcol(transform, lons, lats)[0], dtype=int)
+    cols = np.asarray(rasterio.transform.rowcol(transform, lons, lats)[1], dtype=int)
+    h_px, w_px = data.shape
+    imp = np.zeros(len(lons), dtype=float)
+    valid = (rows >= 0) & (rows < h_px) & (cols >= 0) & (cols < w_px)
+    imp[valid] = data[rows[valid], cols[valid]]
+    mask = imp > threshold_pct
+    print(f'  NLCD filter (>{threshold_pct}% impervious): '
+          f'{mask.sum():,} shots removed ({mask.mean()*100:.1f}%)')
+    return ~mask
+
+
+def _sample_worldcover_points(bbox, lons, lats):
+    """Sample ESA WorldCover integer class at lon/lat point locations."""
+    catalog = pystac_client.Client.open(
+        'https://planetarycomputer.microsoft.com/api/stac/v1',
+        modifier=planetary_computer.sign_inplace)
+    search = catalog.search(collections=['esa-worldcover'], bbox=bbox)
+    items  = list(search.items())
+    if not items:
+        print('  ⚠ WorldCover tile not found — using zeros')
+        return np.zeros(len(lons), dtype=float)
+    with rasterio.open(items[0].assets['map'].href) as src:
+        t = Transformer.from_crs('EPSG:4326', src.crs, always_xy=True)
+        cx, cy = t.transform(lons, lats)
+        wc = np.array([v[0] for v in src.sample(zip(cx, cy))], dtype=float)
+    return wc
+
+
+def _get_worldcover_raster_reprojected(bbox, h, w, dst_transform, dst_crs):
+    """Download WorldCover tile and reproject to match target raster grid."""
+    catalog = pystac_client.Client.open(
+        'https://planetarycomputer.microsoft.com/api/stac/v1',
+        modifier=planetary_computer.sign_inplace)
+    search = catalog.search(collections=['esa-worldcover'], bbox=bbox)
+    items  = list(search.items())
+    if not items:
+        print('  ⚠ WorldCover tile not found — using zeros for prediction')
+        return np.zeros((h, w), dtype=np.float32)
+    wc_dst = np.zeros((h, w), dtype=np.float32)
+    with rasterio.open(items[0].assets['map'].href) as src:
+        # Use rasterio.band() so reproject reads only the overlapping window
+        # instead of loading the entire ~4 GB WorldCover tile into memory.
+        reproject(
+            source=rasterio.band(src, 1),
+            destination=wc_dst,
+            src_transform=src.transform, src_crs=src.crs,
+            dst_transform=dst_transform, dst_crs=dst_crs,
+            resampling=Resampling.nearest,
+        )
+    return wc_dst
 
 
 # ============================================================================
@@ -1127,8 +1220,22 @@ def create_synthetic_dem(bbox, output_path):
 # PART 3: MODEL TRAINING
 # ============================================================================
 
-def extract_features(gedi_csv, s2_tif, s1_tif, topo_tif):
-    """Extract features with CRS handling and robust nodata replacement"""
+def extract_features(gedi_csv, s2_tif, s1_tif, topo_tif, bbox):
+    """
+    Extract features and apply label cleaning (manager config, 2026-03-09).
+
+    Label filter:
+      - CONUS bbox  → NLCD 2021 fractional impervious ≤10%
+      - Non-CONUS   → ESA WorldCover class-50 exclusion
+
+    Features (19 total):
+      S2×11, S1×2, topo×3, latitude, longitude, wc_class
+      No structural prior (ctrees / DL-CHM removed per manager decision).
+
+    Returns
+    -------
+    X, y, feature_names, n_total, n_clean, label_filter
+    """
     print("\n" + "="*60)
     print("Extracting Features (Fixed CRS & NoData)")
     print("="*60 + "\n")
@@ -1224,47 +1331,92 @@ def extract_features(gedi_csv, s2_tif, s1_tif, topo_tif):
     X = np.column_stack([X, coords_features])
     final_features = names_list + ['latitude', 'longitude']
 
-    print(f"Final training samples: {len(X)}")
-    print(f"Total features: {len(final_features)} (including latitude, longitude)")
-    return X, y, final_features
+    # -----------------------------------------------------------------------
+    # WorldCover class (feature 19) + label filter (manager config 2026-03-09)
+    # -----------------------------------------------------------------------
+    print(f"  Sampling ESA WorldCover class...")
+    wc_class = _sample_worldcover_points(bbox, lons_filtered, lats_filtered)
+
+    if is_conus_bbox(bbox):
+        print(f"  NLCD label filter (CONUS)...")
+        clean = _get_nlcd_clean_mask(lons_filtered, lats_filtered, bbox)
+        label_filter = 'nlcd_2021_le10pct'
+    else:
+        clean        = wc_class != 50
+        label_filter = 'worldcover_class50'
+        n_removed    = int((~clean).sum())
+        print(f'  WorldCover class-50 filter: {n_removed:,} shots removed '
+              f'({n_removed/len(clean)*100:.1f}%)')
+
+    n_total        = len(X)
+    X              = np.column_stack([X, wc_class])[clean]
+    y              = y[clean]
+    final_features = final_features + ['wc_class']
+    n_clean        = len(X)
+
+    print(f"  Clean shots after filter: {n_clean:,} of {n_total:,} "
+          f"({n_clean/n_total*100:.1f}%)")
+    print(f"Final training samples: {n_clean}")
+    print(f"Total features: {len(final_features)}")
+    return X, y, final_features, n_total, n_clean, label_filter
 
 
-def train_model(X, y, names):
-    """Train Random Forest"""
+def train_model(X, y, names, model_type='RFR'):
+    """
+    Train a regression model.
+
+    Parameters
+    ----------
+    model_type : str
+        'RFR' — Random Forest Regressor (default)
+        'HGB' — Histogram Gradient Boosting Regressor
+    """
     print("\n" + "="*60)
-    print("Training Model")
+    print(f"Training Model ({model_type})")
     print("="*60 + "\n")
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    model = RandomForestRegressor(
-        n_estimators=500, max_depth=30,
-        min_samples_split=10, min_samples_leaf=2,
-        max_features='log2', random_state=42, n_jobs=-1
-    )
+    if model_type == 'RFR':
+        model = RandomForestRegressor(
+            n_estimators=100, max_depth=20,
+            min_samples_split=5, min_samples_leaf=20,
+            max_features=None, random_state=42, n_jobs=-1,
+        )
+    elif model_type == 'HGB':
+        from sklearn.ensemble import HistGradientBoostingRegressor
+        model = HistGradientBoostingRegressor(
+            max_iter=300, learning_rate=0.1,
+            max_leaf_nodes=31, min_samples_leaf=20,
+            random_state=42,
+        )
+    else:
+        raise ValueError(f"Unsupported model_type '{model_type}'. Use 'RFR' or 'HGB'.")
+
     model.fit(X_train, y_train)
 
     y_pred = model.predict(X_test)
-    r2 = r2_score(y_test, y_pred)
+    r2   = r2_score(y_test, y_pred)
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
 
     print(f"R²: {r2:.3f}, RMSE: {rmse:.2f} m")
 
-    # Top features
-    imp = pd.DataFrame({'feature': names, 'importance': model.feature_importances_})
-    imp = imp.sort_values('importance', ascending=False)
-    print("\nTop 5 Features:")
-    for _, row in imp.head(5).iterrows():
-        print(f"  {row['feature']}: {row['importance']:.3f}")
+    if hasattr(model, 'feature_importances_'):
+        imp = pd.DataFrame({'feature': names, 'importance': model.feature_importances_})
+        imp = imp.sort_values('importance', ascending=False)
+        print("\nTop 5 Features:")
+        for _, row in imp.head(5).iterrows():
+            print(f"  {row['feature']}: {row['importance']:.3f}")
 
     return model
 
 
-def predict_map(model, s2_tif, s1_tif, topo_tif, output='canopy_height.tif'):
-    """Generate height map with lat/lon coordinate features
+def predict_map(model, s2_tif, s1_tif, topo_tif, bbox, output='canopy_height.tif'):
+    """
+    Generate wall-to-wall canopy height raster.
 
-    Now includes latitude and longitude as input features (18 features total:
-    10 Sentinel-2 bands + 3 topographic bands + 2 Sentinel-1 bands + 2 coordinate bands + 1 NDVI)
+    Feature order matches extract_features():
+      S2 × 11, S1 × 2, topo × 3, latitude, longitude, wc_class  (19 total)
     """
     print("\n" + "="*60)
     print("Generating Height Map")
@@ -1278,68 +1430,69 @@ def predict_map(model, s2_tif, s1_tif, topo_tif, output='canopy_height.tif'):
     with rasterio.open(s2_tif) as s2_src:
         s2_data = s2_src.read()
         profile = s2_src.profile
+        s2_crs  = s2_src.crs
+        s2_tfm  = s2_src.transform
 
-        # Get coordinate grids for latitude and longitude
         h, w = s2_data.shape[1], s2_data.shape[2]
-
-        # Create coordinate arrays
-        # Get the coordinates of each pixel center
         rows, cols = np.indices((h, w))
-        transform = s2_src.transform
 
-        # Convert pixel coordinates to lat/lon
-        # Formula: lon = transform[2] + col * transform[0] + row * transform[1]
-        #         lat = transform[5] + col * transform[3] + row * transform[4]
-        lons = transform[2] + cols * transform[0] + rows * transform[1]
-        lats = transform[5] + cols * transform[3] + rows * transform[4]
+        lons = s2_tfm[2] + cols * s2_tfm[0] + rows * s2_tfm[1]
+        lats = s2_tfm[5] + cols * s2_tfm[3] + rows * s2_tfm[4]
 
-        # Resample S1
         if s1_tif and os.path.exists(s1_tif):
             with rasterio.open(s1_tif) as s1_src:
-                s1_data = np.zeros((s1_src.count, s2_data.shape[1], s2_data.shape[2]))
+                s1_data = np.zeros((s1_src.count, h, w))
                 for i in range(s1_src.count):
                     reproject(
                         s1_src.read(i+1), s1_data[i],
                         src_transform=s1_src.transform, src_crs=s1_src.crs,
-                        dst_transform=s2_src.transform, dst_crs=s2_src.crs,
+                        dst_transform=s2_tfm, dst_crs=s2_crs,
                         resampling=Resampling.bilinear
                     )
         else:
-            s1_data = np.array([]).reshape(0, s2_data.shape[1], s2_data.shape[2])
+            s1_data = np.array([]).reshape(0, h, w)
 
-        # Resample topo
         with rasterio.open(topo_tif) as topo_src:
-            topo_data = np.zeros((topo_src.count, s2_data.shape[1], s2_data.shape[2]))
+            topo_data = np.zeros((topo_src.count, h, w))
             for i in range(topo_src.count):
                 reproject(
                     topo_src.read(i+1), topo_data[i],
                     src_transform=topo_src.transform, src_crs=topo_src.crs,
-                    dst_transform=s2_src.transform, dst_crs=s2_src.crs,
+                    dst_transform=s2_tfm, dst_crs=s2_crs,
                     resampling=Resampling.bilinear
                 )
 
-    # Stack features and save shape for later use
-    h, w = s2_data.shape[1], s2_data.shape[2]
+    all_data = (np.vstack([s2_data, s1_data, topo_data])
+                if s1_data.shape[0] > 0
+                else np.vstack([s2_data, topo_data]))
+    del s2_data, s1_data, topo_data
 
-    all_data = np.vstack([s2_data, s1_data, topo_data]) if s1_data.shape[0] > 0 else np.vstack([s2_data, topo_data])
+    # WorldCover class (feature 19) — reproject to match S2 grid
+    print("  Downloading WorldCover raster for prediction grid...")
+    wc_data = _get_worldcover_raster_reprojected(bbox, h, w, s2_tfm, s2_crs)
 
-    # Add lat/lon as features (reshape to match data format)
-    lat_flat = lats.reshape(-1, 1)
-    lon_flat = lons.reshape(-1, 1)
-    coords_data = np.hstack([lat_flat, lon_flat])
+    # Build full feature matrix (H*W, 19): [S2, S1, topo, lat, lon, wc_class]
+    n_pixels = h * w
+    data_2d = np.empty((n_pixels, all_data.shape[0] + 3), dtype=np.float32)
+    data_2d[:, :all_data.shape[0]] = all_data.reshape(all_data.shape[0], -1).T
+    del all_data
+    data_2d[:, -3] = lats.ravel()
+    data_2d[:, -2] = lons.ravel()
+    data_2d[:, -1] = wc_data.ravel()
+    del wc_data
 
-    # Combine: [features, lat, lon]
-    all_data_with_coords = np.vstack([all_data.reshape(all_data.shape[0], -1), coords_data.T])
+    valid = (np.all(np.isfinite(data_2d), axis=1) &
+             np.all(np.abs(data_2d) < 1e10, axis=1))
+    print(f"Valid pixels: {valid.sum()}/{n_pixels} ({valid.sum()/n_pixels*100:.1f}%)")
 
-    # Predict
-    data_2d = all_data_with_coords.T
-    
-    valid = np.all(np.isfinite(data_2d), axis=1) & np.all(np.abs(data_2d) < 1e10, axis=1)
-    print(f"Valid pixels: {valid.sum()}/{len(valid)} ({valid.sum()/len(valid)*100:.1f}%)")
-    
-    pred = np.full(len(valid), np.nan)
-    if valid.sum() > 0:
-        pred[valid] = model.predict(data_2d[valid])
+    # Predict in batches to cap peak memory usage
+    BATCH = 200_000
+    pred = np.full(n_pixels, np.nan, dtype=np.float32)
+    valid_idx = np.where(valid)[0]
+    for start in range(0, len(valid_idx), BATCH):
+        batch_idx = valid_idx[start:start + BATCH]
+        pred[batch_idx] = model.predict(data_2d[batch_idx])
+    del data_2d
     
     pred = np.clip(pred, 0, 100).reshape(h, w)
     
@@ -1491,13 +1644,15 @@ if __name__ == "__main__":
     # STEP 3: Train model
     print("\n\nSTEP 3: Model Training\n")
     
-    X, y, features = extract_features(gedi_csv, s2_path, s1_path, topo_path)
+    X, y, features, n_total, n_clean, label_filter = extract_features(
+        gedi_csv, s2_path, s1_path, topo_path, bbox)
+    print(f"  Label filter: {label_filter}  |  clean: {n_clean:,}/{n_total:,}")
     model = train_model(X, y, features)
-    
+
     # STEP 4: Predict
     print("\n\nSTEP 4: Prediction\n")
-    
-    predict_map(model, s2_path, s1_path, topo_path, 
+
+    predict_map(model, s2_path, s1_path, topo_path, bbox,
                 f'{output_dir}/canopy_height_map.tif')
     
     print("\n" + "="*60)
