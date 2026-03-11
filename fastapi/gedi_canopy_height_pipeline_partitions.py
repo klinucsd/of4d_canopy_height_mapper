@@ -33,7 +33,7 @@ import multiprocessing
 from pathlib import Path
 
 # Import partition loader
-from canopy_height_gedi_loader import load_gedi_for_bbox, get_gedi_stats
+from gedi_canopy_height_loader import load_gedi_for_bbox, get_gedi_stats
 
 # Load environment variables
 from dotenv import load_dotenv

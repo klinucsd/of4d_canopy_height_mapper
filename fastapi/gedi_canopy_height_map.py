@@ -52,7 +52,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 
 # Import pipeline functions
-from canopy_height_gedi_loader import load_gedi_for_bbox, get_gedi_stats
+from gedi_canopy_height_loader import load_gedi_for_bbox, get_gedi_stats
 import gedi_canopy_height_pipeline_partitions as chp
 from gedi_canopy_height_metadata_builder import build_metadata_from_job
 
