@@ -372,7 +372,7 @@ def main():
 
     try:
         X, y, features, n_total, n_clean, label_filter = chp.extract_features(
-            gedi_csv, s2_path, s1_path, topo_path, bbox)
+            gedi_csv, s2_path, s1_path, topo_path, bbox, output_dir=args.output_dir)
         print(f"✓ Extracted {n_clean} clean samples of {n_total} total "
               f"({n_clean/n_total*100:.1f}%) — filter: {label_filter}")
         print(f"  Features: {len(features)}")
@@ -487,6 +487,7 @@ def main():
             ml_algorithm=args.ml_algorithm,
             execution_time_minutes=execution_minutes,
             s2_scenes_used=s2_scenes_used,
+            label_filter=label_filter,
         )
         print(f"✓ Saved metadata to {args.output_dir}/metadata.json")
     except Exception as e:

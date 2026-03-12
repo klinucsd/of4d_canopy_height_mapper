@@ -57,10 +57,11 @@ def is_conus_bbox(bbox):
             min_lat < _CONUS_BBOX[3] and max_lat > _CONUS_BBOX[1])
 
 
-def _get_nlcd_clean_mask(lons, lats, bbox, threshold_pct=10):
+def _get_nlcd_clean_mask(lons, lats, bbox, threshold_pct=10, save_path=None):
     """
     Return boolean array (True = clean / non-impervious) via NLCD 2021 WMS.
     Only valid for CONUS; raises ValueError for non-CONUS bbox.
+    If save_path is given, saves a PNG of the impervious-surface raster.
     """
     min_lon, min_lat, max_lon, max_lat = bbox
     buf = 0.05
@@ -96,6 +97,24 @@ def _get_nlcd_clean_mask(lons, lats, bbox, threshold_pct=10):
     mask = imp > threshold_pct
     print(f'  NLCD filter (>{threshold_pct}% impervious): '
           f'{mask.sum():,} shots removed ({mask.mean()*100:.1f}%)')
+
+    if save_path:
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(8, 6))
+            im = ax.imshow(data, cmap='hot_r', vmin=0, vmax=100, interpolation='nearest')
+            plt.colorbar(im, ax=ax, label='Impervious surface (%)')
+            ax.set_title('NLCD 2021 Impervious Surface')
+            ax.axis('off')
+            plt.tight_layout()
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            print(f'  Saved: {save_path}')
+        except Exception as e:
+            print(f'  ⚠ Could not save NLCD PNG: {e}')
+
     return ~mask   # True = clean
 
 
@@ -116,11 +135,12 @@ def _sample_worldcover_points(bbox, lons, lats):
     return wc
 
 
-def _get_worldcover_raster_reprojected(bbox, h, w, dst_transform, dst_crs):
+def _get_worldcover_raster_reprojected(bbox, h, w, dst_transform, dst_crs, save_path=None):
     """
     Download WorldCover tile and reproject to match the target raster grid.
     Returns float32 array of shape (h, w).  Uses nearest-neighbour resampling
     because WorldCover values are categorical class integers.
+    If save_path is given, saves a PNG of the land cover class raster.
     """
     stac   = pystac_client.Client.open(
         'https://planetarycomputer.microsoft.com/api/stac/v1')
@@ -141,6 +161,24 @@ def _get_worldcover_raster_reprojected(bbox, h, w, dst_transform, dst_crs):
             dst_transform=dst_transform, dst_crs=dst_crs,
             resampling=Resampling.nearest,
         )
+
+    if save_path:
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(8, 6))
+            im = ax.imshow(wc_dst, cmap='tab20', interpolation='nearest')
+            plt.colorbar(im, ax=ax, label='WorldCover class')
+            ax.set_title('ESA WorldCover Land Cover')
+            ax.axis('off')
+            plt.tight_layout()
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            print(f'  Saved: {save_path}')
+        except Exception as e:
+            print(f'  ⚠ Could not save WorldCover PNG: {e}')
+
     return wc_dst
 
 
@@ -896,7 +934,7 @@ def create_synthetic_dem(bbox, output_path):
 # PART 3: MODEL TRAINING (Same as original)
 # ============================================================================
 
-def extract_features(gedi_csv, s2_tif, s1_tif, topo_tif, bbox):
+def extract_features(gedi_csv, s2_tif, s1_tif, topo_tif, bbox, output_dir=None):
     """
     Extract features and apply label cleaning (manager config, 2026-03-09).
 
@@ -993,7 +1031,8 @@ def extract_features(gedi_csv, s2_tif, s1_tif, topo_tif, bbox):
 
     if is_conus_bbox(bbox):
         print(f"  NLCD label filter (CONUS)...")
-        clean = _get_nlcd_clean_mask(lons_filtered, lats_filtered, bbox)
+        nlcd_save_path = os.path.join(output_dir, 'land_cover_nlcd.png') if output_dir else None
+        clean = _get_nlcd_clean_mask(lons_filtered, lats_filtered, bbox, save_path=nlcd_save_path)
         label_filter = 'nlcd_2021_le10pct'
     else:
         # WorldCover class-50 = built-up / impervious
@@ -1104,8 +1143,9 @@ def predict_map(model, s2_tif, s1_tif, topo_tif, bbox, output='canopy_height.tif
 
     # WorldCover class (feature 19) — reproject to match S2 grid
     print("  Downloading WorldCover raster for prediction grid...")
+    wc_save_path = os.path.join(os.path.dirname(os.path.abspath(output)), 'land_cover_worldcover.png')
     wc_data = _get_worldcover_raster_reprojected(
-        bbox, h, w, s2_tfm, s2_crs)
+        bbox, h, w, s2_tfm, s2_crs, save_path=wc_save_path)
 
     # Build full feature matrix (H*W, 19): [S2, S1, topo, lat, lon, wc_class]
     # Layout matches extract_features() — do NOT reorder.

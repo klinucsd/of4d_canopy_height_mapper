@@ -294,7 +294,8 @@ def build_metadata_from_job(output_dir: str, job_id: str, output_url: str,
                             cloud_threshold: int, s1_available: bool,
                             dem_dataset: str, model, X_train, y_test, y_pred,
                             features, ml_algorithm: str, execution_time_minutes: float,
-                            s2_scenes_used: int = 0) -> str:
+                            s2_scenes_used: int = 0,
+                            label_filter: str = None) -> str:
     """
     Convenience function to build complete metadata from job parameters.
 
@@ -315,5 +316,18 @@ def build_metadata_from_job(output_dir: str, job_id: str, output_url: str,
     builder.add_model_training_metadata(model, X_train, y_test, y_pred, features, ml_algorithm)
     builder.add_prediction_results(output_dir)
     builder.set_execution_time(execution_time_minutes)
+
+    if label_filter is not None:
+        if label_filter == 'nlcd_2021_le10pct':
+            lc_image = 'land_cover_nlcd.png'
+            lc_description = 'NLCD 2021 impervious surface ≤10% (CONUS)'
+        else:
+            lc_image = 'land_cover_worldcover.png'
+            lc_description = 'ESA WorldCover class-50 (built-up) exclusion'
+        builder.metadata['land_cover_filter'] = {
+            'label_filter': label_filter,
+            'description': lc_description,
+            'image': lc_image,
+        }
 
     return builder.save(output_dir)

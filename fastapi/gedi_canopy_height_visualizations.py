@@ -591,9 +591,10 @@ def plot_canopy_height_map(height_map_path, gedi_csv=None, title="Canopy Height 
             resampling=Resampling.bilinear)
 
     # Calculate extent in lat/lon
-    # Transform pixel coordinates to geographic coordinates
-    min_lon, min_lat = transform * (0, 0)
-    max_lon, max_lat = transform * (width, height)
+    # transform*(0,0) is the top-left (NW) corner; transform*(w,h) is bottom-right (SE).
+    # imshow with origin='lower' expects extent=[left, right, bottom, top] = [W, E, S, N].
+    min_lon, max_lat = transform * (0, 0)       # NW corner → west, north
+    max_lon, min_lat = transform * (width, height)  # SE corner → east, south
     extent = [min_lon, max_lon, min_lat, max_lat]
 
     # Create full-width map only
@@ -901,9 +902,9 @@ def create_pipeline_summary(gedi_csv, s2_tif, height_map_path, model_stats,
             dst_crs=dst_crs,
             resampling=Resampling.bilinear)
 
-    # Calculate extent in lat/lon
-    min_lon, min_lat = transform * (0, 0)
-    max_lon, max_lat = transform * (width, height)
+    # Calculate extent in lat/lon — NW corner is (west, north), SE corner is (east, south)
+    min_lon, max_lat = transform * (0, 0)
+    max_lon, min_lat = transform * (width, height)
     extent = [min_lon, max_lon, min_lat, max_lat]
 
     im = ax5.imshow(reprojected, extent=extent, cmap='YlGnBu', vmin=0, vmax=50, origin='lower')
