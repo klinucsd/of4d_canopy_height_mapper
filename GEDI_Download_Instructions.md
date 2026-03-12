@@ -14,7 +14,7 @@ using two scripts in the project root:
 
 ### 1. Python environment
 ```bash
-~/misc/env/bin/python
+python
 ```
 
 ### 2. NASA EarthData account
