@@ -33,7 +33,7 @@ EARTHDATA_PASSWORD=your_password
 
 ### List available regions
 ```bash
-~/misc/env/bin/python download_gedi_by_region.py --list
+python download_gedi_by_region.py --list
 ```
 
 Available continental regions (within GEDI coverage: 51.6°S – 51.6°N):
@@ -49,25 +49,25 @@ Available continental regions (within GEDI coverage: 51.6°S – 51.6°N):
 
 ### Download all continents sequentially
 ```bash
-~/misc/env/bin/python download_gedi_by_region.py --all
+python download_gedi_by_region.py --all
 ```
 
 ### Download one or more specific continents
 ```bash
-~/misc/env/bin/python download_gedi_by_region.py --region north_america
-~/misc/env/bin/python download_gedi_by_region.py --region north_america europe asia
+python download_gedi_by_region.py --region north_america
+python download_gedi_by_region.py --region north_america europe asia
 ```
 
 ### Resume an interrupted download
 Simply re-run the same command — the script automatically skips already
 processed granules using a checkpoint file:
 ```bash
-~/misc/env/bin/python download_gedi_by_region.py --region africa
+python download_gedi_by_region.py --region africa
 ```
 
 ### Reset and re-download a continent from scratch
 ```bash
-~/misc/env/bin/python download_gedi_by_region.py --region europe --reset
+python download_gedi_by_region.py --region europe --reset
 ```
 
 ### Output structure
@@ -121,7 +121,7 @@ dataset with consistent 1°×1° partitioning.
 ### Dry run first (recommended)
 Check what will be merged without writing any files:
 ```bash
-~/misc/env/bin/python merge_gedi_regions.py \
+python merge_gedi_regions.py \
     --source "gedi_*_2024_2025" \
     --output gedi_global_2024_2025 \
     --dry-run
@@ -129,14 +129,14 @@ Check what will be merged without writing any files:
 
 ### Run the merge
 ```bash
-~/misc/env/bin/python merge_gedi_regions.py \
+python merge_gedi_regions.py \
     --source "gedi_*_2024_2025" \
     --output gedi_global_2024_2025
 ```
 
 ### Merge specific continents only
 ```bash
-~/misc/env/bin/python merge_gedi_regions.py \
+python merge_gedi_regions.py \
     --source gedi_na_2024_2025 gedi_eu_2024_2025 gedi_af_2024_2025 \
     --output gedi_global_2024_2025
 ```
@@ -165,16 +165,16 @@ echo "EARTHDATA_USERNAME=your_username" >> .env
 echo "EARTHDATA_PASSWORD=your_password" >> .env
 
 # 2. Download all continents (resumable — safe to interrupt and re-run)
-~/misc/env/bin/python download_gedi_by_region.py --all
+python download_gedi_by_region.py --all
 
 # 3. Preview the merge
-~/misc/env/bin/python merge_gedi_regions.py \
+python merge_gedi_regions.py \
     --source "gedi_*_2024_2025" \
     --output gedi_global_2024_2025 \
     --dry-run
 
 # 4. Run the merge
-~/misc/env/bin/python merge_gedi_regions.py \
+python merge_gedi_regions.py \
     --source "gedi_*_2024_2025" \
     --output gedi_global_2024_2025
 ```
