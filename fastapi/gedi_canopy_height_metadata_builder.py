@@ -176,7 +176,7 @@ class MetadataBuilder:
         topo_info = {
             "download": "topography.tif",
             "metadata": {
-                "source": "OpenTopography",
+                "source": "NSF OpenTopography",
                 "dataset": dem_dataset,
                 "bands": topo_bands,
                 "resolution": "30m"
