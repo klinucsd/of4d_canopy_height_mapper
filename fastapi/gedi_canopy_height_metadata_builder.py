@@ -330,4 +330,11 @@ def build_metadata_from_job(output_dir: str, job_id: str, output_url: str,
             'image': lc_image,
         }
 
+    if 'wc_class' in features:
+        builder.metadata['land_cover_feature'] = {
+            'feature': 'wc_class',
+            'description': 'ESA WorldCover land cover class (model feature)',
+            'image': 'land_cover_worldcover.png',
+        }
+
     return builder.save(output_dir)
