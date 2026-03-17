@@ -63,6 +63,8 @@ import gedi_canopy_height_visualizations as viz
 from dotenv import load_dotenv
 load_dotenv()
 
+# For work concurrently
+from concurrent.futures import ThreadPoolExecutor
 
 def parse_bbox(bbox_str):
     """Parse bbox string 'min_lon,min_lat,max_lon,max_lat'"""
@@ -134,6 +136,8 @@ def generate_all_visualizations(output_dir, gedi_csv, s2_tif, s1_tif, topo_tif,
     - canopy_height_map.png
     """
     print("  Generating visualizations...")
+    viz_start = time.time()
+    viz_checkpoint = viz_start  # Local checkpoint
 
     # 1. GEDI Data Coverage
     try:
@@ -141,11 +145,15 @@ def generate_all_visualizations(output_dir, gedi_csv, s2_tif, s1_tif, topo_tif,
     except Exception as e:
         print(f"    ⚠ GEDI coverage: {e}")
 
+    viz_checkpoint = log_step("    - GEDI Data Coverage plot", viz_checkpoint)
+
     # 2. GEDI Tracks
     try:
         viz.plot_gedi_tracks(gedi_csv, output_dir=output_dir)
     except Exception as e:
         print(f"    ⚠ GEDI tracks: {e}")
+
+    viz_checkpoint = log_step("    - GEDI tracks plot", viz_checkpoint)
 
     # 3. Sentinel-2 Bands
     try:
@@ -153,17 +161,23 @@ def generate_all_visualizations(output_dir, gedi_csv, s2_tif, s1_tif, topo_tif,
     except Exception as e:
         print(f"    ⚠ S2 bands: {e}")
 
+    viz_checkpoint = log_step("    - Sentinel-2 Bands plot", viz_checkpoint)
+
     # 4. Sentinel-2 Composites
     try:
         viz.plot_sentinel2_composite(s2_tif, output_dir=output_dir)
     except Exception as e:
         print(f"    ⚠ S2 composites: {e}")
 
+    viz_checkpoint = log_step("    - Sentinel-2 Composites plot", viz_checkpoint)
+
     # 5. Sentinel-2 Histograms
     try:
         viz.plot_band_histograms(s2_tif, output_dir=output_dir)
     except Exception as e:
         print(f"    ⚠ S2 histograms: {e}")
+
+    viz_checkpoint = log_step("    - Sentinel-2 Histograms plot", viz_checkpoint)
 
     # 6. Model Validation
     try:
@@ -172,6 +186,8 @@ def generate_all_visualizations(output_dir, gedi_csv, s2_tif, s1_tif, topo_tif,
                                   model_name=ml_algorithm, output_dir=output_dir)
     except Exception as e:
         print(f"    ⚠ Model validation: {e}")
+
+    viz_checkpoint = log_step("    - Model validation plot", viz_checkpoint)
 
     # 7. Pipeline Summary
     try:
@@ -184,18 +200,29 @@ def generate_all_visualizations(output_dir, gedi_csv, s2_tif, s1_tif, topo_tif,
     except Exception as e:
         print(f"    ⚠ Pipeline summary: {e}")
 
+    viz_checkpoint = log_step("    - Pipeline Summary", viz_checkpoint)
+
     # 8. Canopy Height Map (with legend)
     try:
         viz.plot_canopy_height_map(height_map_tif, output_dir=output_dir)
     except Exception as e:
         print(f"    ⚠ Canopy height map: {e}")
 
+    viz_checkpoint = log_step("    - Canopy Height Map plot", viz_checkpoint)
+
     print("  ✓ Visualizations complete")
 
+def log_step(step_name, prev_checkpoint):
+    """Prints the time elapsed since the last checkpoint."""
+    now = time.time()
+    elapsed = now - prev_checkpoint
+    print(f"    [TIMER] {step_name} completed in {elapsed:.2f} seconds")
+    return now
 
 def main():
     """Main worker function"""
     start_time = time.time()
+    checkpoint = start_time
 
     parser = argparse.ArgumentParser(description="GEDI Canopy Height Map Worker (V2)")
 
@@ -316,59 +343,67 @@ def main():
     if len(df) < 100:
         print(f"Warning: Only {len(df)} GEDI points available. Model quality may be poor.")
 
-    # ========================================================================
-    # STEP 2: Download satellite data
-    # ========================================================================
-    print(f"\n[2/5] Downloading satellite data ({args.sentinel_temporal_min} to {args.sentinel_temporal_max})...")
+    checkpoint = log_step("Step 1 (GEDI Loading)", checkpoint)
 
-    # Sentinel-2 (with user-specified cloud threshold)
-    s2_path = os.path.join(args.output_dir, "sentinel2_optical_composite.tif")
-    s2_scenes_used = 0
-    try:
-        s2_path = chp.download_sentinel2_mpc(
+    # ========================================================================
+    # STEP 2: Download satellite data (Parallel Version)
+    # ========================================================================
+    print(f"\n[2/5] Downloading satellite data ({args.sentinel_temporal_min} to {args.sentinel_temporal_max}) in parallel...")
+    step2_start = time.time()
+
+    def task_s2():
+        path = os.path.join(args.output_dir, "sentinel2_optical_composite.tif")
+        print("  Starting Sentinel-2 download...")
+        return chp.download_sentinel2_mpc(
             bbox, args.sentinel_temporal_min, args.sentinel_temporal_max,
-            s2_path,
-            max_items=10,
-            resolution=args.resolution,
-            n_workers=4,
-            cloud_threshold=args.cloud_threshold
-        )
-        s2_scenes_used = 10  # Approximate count
-    except Exception as e:
-        print(f"Error downloading Sentinel-2: {e}", file=sys.stderr)
-        return 1
+            path, max_items=10, resolution=args.resolution,
+            n_workers=4, cloud_threshold=args.cloud_threshold
+        ), 10 # return path and scenes count
 
-    # Sentinel-1 (optional)
-    s1_path = None
-    if args.use_sentinel1:
-        print("\nDownloading Sentinel-1...")
-        s1_path = os.path.join(args.output_dir, "sentinel1_sar_composite.tif")
+    def task_s1():
+        if not args.use_sentinel1:
+            return None, 0
+        print("  Starting Sentinel-1 download...")
+        path = os.path.join(args.output_dir, "sentinel1_sar_composite.tif")
         try:
-            s1_path = chp.download_sentinel1_mpc(
+            res = chp.download_sentinel1_mpc(
                 bbox, args.sentinel_temporal_min, args.sentinel_temporal_max,
-                s1_path,
-                max_items=5
+                path, max_items=5
             )
-            if s1_path is None:
-                print("  Note: Sentinel-1 not available, continuing without it")
-                s1_path = None
+            return res, 5
         except Exception as e:
-            print(f"  Warning: Sentinel-1 download failed: {e}")
-            s1_path = None
+            print(f"  Warning: Sentinel-1 failed: {e}")
+            return None, 0
 
-    # Topography (with user-specified DEM type)
-    print(f"\nDownloading {args.dem_dataset} topography...")
-    topo_path = os.path.join(args.output_dir, "topography.tif")
-    try:
-        topo_path = chp.download_srtm_opentopography(bbox, topo_path, dem_type=args.dem_dataset)
-    except Exception as e:
-        print(f"Error downloading topography: {e}", file=sys.stderr)
-        return 1
+    def task_topo():
+        print(f"  Starting {args.dem_dataset} download...")
+        path = os.path.join(args.output_dir, "topography.tif")
+        return chp.download_srtm_opentopography(bbox, path, dem_type=args.dem_dataset), 0
+
+    # Execute in parallel
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        future_s2 = executor.submit(task_s2)
+        future_s1 = executor.submit(task_s1)
+        future_topo = executor.submit(task_topo)
+
+        # Retrieve results
+        try:
+            s2_path, s2_scenes_used = future_s2.result()
+            s1_path, _ = future_s1.result()
+            topo_path, _ = future_topo.result()
+        except Exception as e:
+            print(f"Critical error in parallel download: {e}", file=sys.stderr)
+            return 1
+
+    # Use our existing timer helper for the combined step
+    main_checkpoint = log_step("Step 2 (Parallel Satellite/Topo Downloads)", step2_start)
+
 
     # ========================================================================
     # STEP 3: Train model
     # ========================================================================
     print("\n[3/5] Training model...")
+    checkpoint = time.time()
 
     try:
         X, y, features, n_total, n_clean, label_filter = chp.extract_features(
@@ -429,6 +464,8 @@ def main():
         json.dump(metrics, f, indent=2)
     print(f"✓ Saved metrics to {metrics_path}")
 
+    checkpoint = log_step("Step 3 (Training model)", checkpoint)
+
     # ========================================================================
     # STEP 4: Generate canopy height map
     # ========================================================================
@@ -440,6 +477,8 @@ def main():
     except Exception as e:
         print(f"Error generating height map: {e}", file=sys.stderr)
         return 1
+
+    checkpoint = log_step("Step 4 (Generating canopy height map)", checkpoint)
 
     # ========================================================================
     # STEP 5: Generate visualizations and metadata
@@ -492,6 +531,8 @@ def main():
         print(f"✓ Saved metadata to {args.output_dir}/metadata.json")
     except Exception as e:
         print(f"    ⚠ Metadata generation failed: {e}")
+
+    checkpoint = log_step("Step 5 (Generating visualizations and metadata)", checkpoint)
 
     # ========================================================================
     # FINAL SUMMARY
