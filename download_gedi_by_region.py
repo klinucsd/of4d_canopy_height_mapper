@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Download and Partition GEDI L2A Data by Continental Regions (2024-2025)
+Download and Partition GEDI L2A Data by Continental Regions (2022)
 Partitions by 1° × 1° grid cells for efficient spatial access.
 
 RESUME CAPABILITY: Can be interrupted and resumed. Progress is tracked
 in a checkpoint file. Already processed granules are skipped.
 
 Output structure:
-    gedi_na_2024_2025/     # North America
+    gedi_na_2022/     # North America
     ├── lat_32_lon_-118/
     │   └── part.parquet
     ├── .checkpoint.json
     ...
 
-    gedi_eu_2024_2025/     # Europe
+    gedi_eu_2022/     # Europe
     └── ...
 
 Usage:
@@ -55,8 +55,8 @@ GEDI_MAX_LAT = 51.6
 GEDI_MIN_LAT = -51.6
 
 # Date range
-START_DATE = '2024-01-01'
-END_DATE = '2025-12-31'
+START_DATE = '2022-04-01'
+END_DATE = '2022-09-30'
 
 # Processing parameters
 BATCH_SIZE = 16  # Process in batches of N granules
@@ -67,38 +67,38 @@ CHECKPOINT_FILE = '.gedi_checkpoint.json'
 REGIONS = {
     "north_america": {
         "name": "North America",
-        "bbox": [-168, 15, -50, GEDI_MAX_LAT],
-        "output": "gedi_na_2024_2025",
+        "bbox": [-180, 15, -34, GEDI_MAX_LAT],
+        "output": "gedi_na_2022",
         "description": "Canada, USA, Mexico, Central America"
     },
     "south_america": {
         "name": "South America",
-        "bbox": [-82, -56, -34, 13],
-        "output": "gedi_sa_2024_2025",
+        "bbox": [-180, GEDI_MIN_LAT, -34, 15],
+        "output": "gedi_sa_2022",
         "description": "South American continent"
     },
     "europe": {
         "name": "Europe",
-        "bbox": [-11, 34, 45, GEDI_MAX_LAT],
-        "output": "gedi_eu_2024_2025",
+        "bbox": [-34, 34, 45, GEDI_MAX_LAT],
+        "output": "gedi_eu_2022",
         "description": "European continent"
     },
     "africa": {
         "name": "Africa",
-        "bbox": [-18, -35, 52, 38],
-        "output": "gedi_af_2024_2025",
+        "bbox": [-34, GEDI_MIN_LAT, 45, 34],
+        "output": "gedi_af_2022",
         "description": "African continent + Madagascar"
     },
     "asia": {
         "name": "Asia",
-        "bbox": [45, -11, 180, GEDI_MAX_LAT],
-        "output": "gedi_as_2024_2025",
+        "bbox": [45, -10, 180, GEDI_MAX_LAT],
+        "output": "gedi_as_2022",
         "description": "Asia (including Middle East, Japan, Southeast Asia)"
     },
     "oceania": {
         "name": "Oceania",
-        "bbox": [110, -45, 180, -10],
-        "output": "gedi_oc_2024_2025",
+        "bbox": [45, GEDI_MIN_LAT, 180, -10],
+        "output": "gedi_oc_2022",
         "description": "Australia, New Zealand, Pacific Islands"
     }
 }
@@ -107,7 +107,7 @@ REGIONS = {
 def list_regions():
     """Print all available regions with details."""
     print("\n" + "="*70)
-    print("Available Continental Regions (2024-2025)")
+    print("Available Continental Regions (2022)")
     print("="*70)
     print(f"\nNote: GEDI covers {GEDI_MIN_LAT}° to {GEDI_MAX_LAT}° (ISS orbit limits)\n")
 
@@ -130,22 +130,15 @@ def get_partition_key(lat, lon):
     lon_floor = int(np.floor(lon))
     return f'lat_{lat_floor}_lon_{lon_floor}'
 
-
 def process_single_granule(h5_file_path, bbox=None):
     """
     Extract GEDI data from a single HDF5 file and partition by grid cell.
-
-    Args:
-        h5_file_path: Path to HDF5 file
-        bbox: Optional bounding box filter [min_lon, min_lat, max_lon, max_lat]
-
-    Returns:
-        dict: {partition_key: list_of_dicts} or None if error
+    Optimized to only read valid rows from disk and include requested sensitivity fields.
     """
     try:
         partitions = {}
 
-        # Validate file can be opened before processing
+        # Validate file can be opened
         try:
             f = h5py.File(h5_file_path, 'r')
         except Exception as e:
@@ -153,76 +146,84 @@ def process_single_granule(h5_file_path, bbox=None):
             return None
 
         with f:
+            # Get all beam names (e.g., BEAM0000, BEAM0001, etc.)
             beams = [k for k in f.keys() if k.startswith('BEAM')]
 
             for beam in beams:
                 try:
+                    # --- STEP 1: FAST READ FOR FILTERING ---
+                    # Only read the flags and RH98 to decide what to keep
+                    quality = f[f'{beam}/quality_flag'][:]
+                    degrade = f[f'{beam}/degrade_flag'][:]
+                    rh_all = f[f'{beam}/rh'][:]
+                    rh98 = rh_all[:, 98]
+
+                    # APPLY STRICT FILTER: quality=1 AND degrade=0 AND height limits
+                    valid = (quality == 1) & (degrade == 0) & (rh98 > 0) & (rh98 < 130)
+
+                    # Optional bounding box filter (requires lat/lon)
                     lat = f[f'{beam}/lat_lowestmode'][:]
                     lon = f[f'{beam}/lon_lowestmode'][:]
-                    rh = f[f'{beam}/rh'][:]
-                    rh98 = rh[:, 98]
-                    rh50 = rh[:, 50]
-                    quality = f[f'{beam}/quality_flag'][:]
-                    sensitivity = f[f'{beam}/sensitivity'][:]
-                    degrade = f[f'{beam}/degrade_flag'][:]
-
-                    # Valid shots (allow tall trees like Redwoods >100m)
-                    # Upper limit of 130m covers Hyperion (115.9m) with margin
-                    valid = (quality == 1) & (rh98 > 0) & (rh98 < 130)
-
-                    # Optional bbox filter
                     if bbox is not None:
                         valid &= (
                             (lon >= bbox[0]) & (lon <= bbox[2]) &
                             (lat >= bbox[1]) & (lat <= bbox[3])
                         )
 
+                    # EARLY EXIT: If no shots in this beam are valid, skip to next beam
                     if not np.any(valid):
                         continue
 
-                    # Extract valid data
-                    lat_valid = lat[valid]
-                    lon_valid = lon[valid]
-                    rh98_valid = rh98[valid]
-                    rh50_valid = rh50[valid]
-                    sensitivity_valid = sensitivity[valid]
-                    degrade_valid = degrade[valid]
-
-                    # Vectorized partition assignment (100x+ faster than loop)
-                    lat_floor = np.floor(lat_valid).astype(int)
-                    lon_floor = np.floor(lon_valid).astype(int)
-
-                    # Create DataFrame for fast groupby
+                    # --- STEP 2: LAZY READ OF REMAINING FIELDS ---
+                    # We only pull the data for rows where 'valid' is True
+                    # This saves significant memory and I/O time
                     df = pd.DataFrame({
-                        'latitude': lat_valid,
-                        'longitude': lon_valid,
-                        'rh98': rh98_valid,
-                        'rh50': rh50_valid,
-                        'sensitivity': sensitivity_valid,
-                        'degrade_flag': degrade_valid,
-                        '_lat_key': lat_floor,
-                        '_lon_key': lon_floor
+                        'beam': f[f'{beam}/beam'][valid],
+                        'latitude': lat[valid],
+                        'longitude': lon[valid],
+                        'rh98': rh98[valid],
+                        'solar_elevation': f[f'{beam}/solar_elevation'][valid],
+                        'sensitivity': f[f'{beam}/sensitivity'][valid]
                     })
+
+                    # --- STEP 3: ORIGINAL PARTITIONING LOGIC ---
+                    # Vectorized partition assignment (100x+ faster than loop)
+                    lat_floor = np.floor(df['latitude']).astype(int)
+                    lon_floor = np.floor(df['longitude']).astype(int)
+
+                    # Add temporary keys to the DataFrame for grouping
+                    df['_lat_key'] = lat_floor
+                    df['_lon_key'] = lon_floor
 
                     # Group by partition key and collect data
                     for (lat_k, lon_k), group in df.groupby(['_lat_key', '_lon_key']):
                         key = f'lat_{lat_k}_lon_{lon_k}'
                         if key not in partitions:
                             partitions[key] = []
-                        # Use to_dict('records') for fast conversion
-                        partitions[key].extend(
-                            group[['latitude', 'longitude', 'rh98',
-                                   'rh50', 'sensitivity', 'degrade_flag']].to_dict('records')
-                        )
 
-                except Exception:
+                        # Define exactly which columns to export to the final list
+                        output_cols = [
+                            'beam',
+                            'latitude',
+                            'longitude',
+                            'rh98',
+                            'solar_elevation',
+                            'sensitivity'
+                        ]
+
+                        # Use to_dict('records') for fast conversion
+                        partitions[key].extend(group[output_cols].to_dict('records'))
+
+                except Exception as e:
+                    # Skip problematic beams but keep processing others
+                    print(f"    Error processing beam {beam}: {e}")
                     continue
 
         return partitions
 
     except Exception as e:
+        print(f"Error in process_single_granule: {e}")
         return None
-
 
 def load_checkpoint(checkpoint_path):
     """Load checkpoint file if it exists."""
@@ -294,7 +295,7 @@ def download_region(region_key, n_workers=None, batch_size=BATCH_SIZE, reset=Fal
     region_name = region['name']
 
     print("\n" + "="*70)
-    print(f"GEDI {region_name} 2024-2025 - Download and Partition")
+    print(f"GEDI {region_name} 2022 - Download and Partition")
     print("="*70)
     print(f"\nBounding Box: {bbox}")
     print(f"Date Range: {START_DATE} to {END_DATE}")
@@ -370,6 +371,10 @@ def download_region(region_key, n_workers=None, batch_size=BATCH_SIZE, reset=Fal
         granule_id = get_granule_id(r)
         if granule_id not in processed_ids:
             pending_granules.append(r)
+
+
+    #pending_granules = pending_granules[:1]
+
 
     print(f"  Pending: {len(pending_granules)} granules")
     print(f"  Already processed: {len(processed_ids)} granules")
@@ -447,7 +452,7 @@ def download_region(region_key, n_workers=None, batch_size=BATCH_SIZE, reset=Fal
 
             # Validate file size (GEDI files are typically >100MB, empty/corrupted files are <50MB)
             file_size_mb = os.path.getsize(h5_file) / (1024 * 1024)
-            if file_size_mb < 50:
+            if file_size_mb < 1:
                 print(f"  ⚠ Skipping {granule_id}: file too small ({file_size_mb:.1f}MB, likely corrupted)")
                 failed_ids.add(granule_id)
                 try:
@@ -459,7 +464,18 @@ def download_region(region_key, n_workers=None, batch_size=BATCH_SIZE, reset=Fal
             try:
                 partitions = process_single_granule(h5_file, bbox)
 
-                if partitions:
+                # If partitions is None, treat as failed (error opening/reading file, etc.)
+                if partitions is None:
+                    print(f"  ⚠ {granule_id}: processing returned None (treating as failed)")
+                    failed_ids.add(granule_id)
+
+                # If partitions is empty, treat as successfully processed but warn (no valid shots)
+                elif len(partitions) == 0:
+                    print(f"  ⚠ {granule_id}: no valid shots after filtering (marked as processed)")
+                    processed_ids.add(granule_id)
+                    failed_ids.discard(granule_id)
+
+                else:
                     # Append each partition to existing data
                     for key, data in partitions.items():
                         partition_dir = output_path / key
@@ -493,7 +509,7 @@ def download_region(region_key, n_workers=None, batch_size=BATCH_SIZE, reset=Fal
         eta_seconds = remaining / rate if rate > 0 else 0
         eta_hours = eta_seconds / 3600
 
-        print(f"\n📊 Progress: {len(processed_ids)}/{total_pending} granules ({len(processed_ids)/total_pending*100:.1f}%)")
+        print(f"\n📊 Progress: {batch_end}/{total_pending} granules ({batch_end/total_pending*100:.1f}%)")
         print(f"   Elapsed: {elapsed/3600:.1f}h | ETA: {eta_hours:.1f}h")
 
         # Small delay between batches to be nice to the API
@@ -549,7 +565,7 @@ def download_region(region_key, n_workers=None, batch_size=BATCH_SIZE, reset=Fal
 def download_all_regions(n_workers=None, batch_size=BATCH_SIZE):
     """Download all regions sequentially."""
     print("\n" + "="*70)
-    print("Downloading ALL Continental Regions (2024-2025)")
+    print("Downloading ALL Continental Regions (2022)")
     print("="*70)
 
     total_regions = len(REGIONS)
